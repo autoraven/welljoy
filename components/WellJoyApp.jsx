@@ -1,0 +1,1617 @@
+'use client'
+
+import { useState, useEffect, useRef, useCallback } from 'react'
+import { supabase } from '../lib/supabase'
+import Image from 'next/image'
+
+// ─── HELPERS ──────────────────────────────────────────────────────────────────
+const formatRp = n => `Rp ${Number(n).toLocaleString('id-ID')}`
+const BNAME = ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember']
+
+const STATUS_COLOR = {
+  HADIR:        { bg:'#E8F5E9', text:'#2E7D32', label:'Hadir' },
+  TERLAMBAT:    { bg:'#FFF8E1', text:'#F57F17', label:'Terlambat' },
+  WFH:          { bg:'#E3F2FD', text:'#1565C0', label:'WFH' },
+  IZIN_SAKIT:   { bg:'#E0F7FA', text:'#006064', label:'Izin Sakit' },
+  IZIN_LAINNYA: { bg:'#F3E5F5', text:'#6A1B9A', label:'Izin Lainnya' },
+  ALPHA:        { bg:'#FFEBEE', text:'#C62828', label:'Alpha' },
+  VALID:        { bg:'#E8F5E9', text:'#2E7D32', label:'Valid' },
+  MENUNGGU:     { bg:'#FFF8E1', text:'#F57F17', label:'Menunggu' },
+  DITOLAK:      { bg:'#FFEBEE', text:'#C62828', label:'Ditolak' },
+  DISETUJUI:    { bg:'#E8F5E9', text:'#2E7D32', label:'Disetujui' },
+  aktif:        { bg:'#E8F5E9', text:'#2E7D32', label:'Aktif' },
+  izin:         { bg:'#E3F2FD', text:'#1565C0', label:'Izin' },
+  resign:       { bg:'#F5F5F5', text:'#616161', label:'Resign' },
+}
+
+// ─── PAYROLL CALC ─────────────────────────────────────────────────────────────
+const calcPayroll = (emp, records) => {
+  const valid = records.filter(a => a.status_validasi === 'VALID')
+  const hadir     = valid.filter(a => ['HADIR','WFH'].includes(a.status_kehadiran)).length
+  const terlambat = valid.filter(a => a.status_kehadiran === 'TERLAMBAT').length
+  const wfh       = valid.filter(a => a.status_kehadiran === 'WFH').length
+  const izinSakit = valid.filter(a => a.status_kehadiran === 'IZIN_SAKIT').length
+  const izinLain  = valid.filter(a => a.status_kehadiran === 'IZIN_LAINNYA').length
+  const alpha     = valid.filter(a => a.status_kehadiran === 'ALPHA').length
+  const totalMenit  = valid.reduce((s,a) => s + (a.menit_terlambat||0), 0)
+  const totalLembur = valid.reduce((s,a) => s + (a.jam_lembur||0), 0)
+  const potTerlambat = totalMenit * (emp.potongan_terlambat_per_menit||5000)
+  const potAlpha     = alpha * ((emp.gaji_pokok||0) / 22)
+  const bonusLembur  = totalLembur * (emp.lembur_per_jam||45000)
+  const totalPenghasilan = (emp.gaji_pokok||0) + (emp.tunjangan_jabatan||0) + (emp.tunjangan_transport||0) + (emp.tunjangan_makan||0) + bonusLembur
+  const totalPotongan    = (emp.bpjs_kesehatan||0) + (emp.bpjs_ketenagakerjaan||0) + (emp.pph21||0) + potTerlambat + potAlpha
+  return { hadir, terlambat, wfh, izinSakit, izinLain, alpha, totalMenit, totalLembur,
+    potTerlambat:Math.round(potTerlambat), potAlpha:Math.round(potAlpha),
+    bonusLembur:Math.round(bonusLembur), totalPenghasilan:Math.round(totalPenghasilan),
+    totalPotongan:Math.round(totalPotongan), takeHomePay:Math.round(totalPenghasilan-totalPotongan) }
+}
+
+// ─── LOGO ─────────────────────────────────────────────────────────────────────
+// Menggunakan gambar dari /public/logo/welljoy-logo.png jika ada,
+// fallback ke SVG inline
+const WellJoyLogo = ({ size = 90 }) => {
+  const [imgError, setImgError] = useState(false)
+
+  if (!imgError) {
+    return (
+      <div style={{ width: size, height: size, position: 'relative', flexShrink: 0 }}>
+        <img
+          src="/logo/welljoy-logo.png"
+          alt="WellJoy Logo"
+          width={size}
+          height={size}
+          style={{ objectFit: 'contain', width: size, height: size }}
+          onError={() => setImgError(true)}
+        />
+      </div>
+    )
+  }
+
+  // Fallback SVG logo
+  return (
+    <svg width={size} height={size} viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M20 30 Q25 20 40 18 L175 15 Q185 15 188 25 L185 90 Q183 100 175 102 L40 105 Q25 107 18 95 Z" fill="url(#yG)"/>
+      <path d="M15 95 Q20 88 35 88 L175 85 Q188 85 190 95 Q185 125 160 130 Q120 140 100 138 Q80 140 40 130 Q15 122 10 110 Q8 102 15 95 Z" fill="url(#rG)"/>
+      <text x="52" y="72" fontFamily="Georgia,serif" fontSize="36" fontWeight="900" fill="#C0392B" letterSpacing="-2">wj</text>
+      <text x="88" y="68" fontFamily="Georgia,serif" fontSize="22" fontWeight="700" fill="#8B1A1A">W</text>
+      <text x="111" y="68" fontFamily="Georgia,serif" fontSize="16" fontWeight="500" fill="#8B1A1A">ell</text>
+      <text x="138" y="68" fontFamily="Georgia,serif" fontSize="22" fontWeight="700" fill="#8B1A1A">j</text>
+      <text x="148" y="68" fontFamily="Georgia,serif" fontSize="16" fontWeight="500" fill="#8B1A1A">oy</text>
+      <text x="100" y="120" textAnchor="middle" fontFamily="Arial,sans-serif" fontSize="20" fontWeight="800" fill="white">Powder Drink</text>
+      <defs>
+        <linearGradient id="yG" x1="0" y1="0" x2="200" y2="0"><stop offset="0%" stopColor="#F5C518"/><stop offset="60%" stopColor="#FFD740"/><stop offset="100%" stopColor="#E8A500"/></linearGradient>
+        <linearGradient id="rG" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#E53935"/><stop offset="100%" stopColor="#B71C1C"/></linearGradient>
+      </defs>
+    </svg>
+  )
+}
+
+// ─── SHARED UI ────────────────────────────────────────────────────────────────
+const Toast = ({ msg }) => msg
+  ? <div style={{ position:'fixed',top:16,left:'50%',transform:'translateX(-50%)',background:'#1a1a1a',color:'white',fontSize:13,padding:'10px 20px',borderRadius:99,boxShadow:'0 4px 20px rgba(0,0,0,0.25)',zIndex:9999,whiteSpace:'nowrap' }}>{msg}</div>
+  : null
+
+const Chip = ({ status }) => {
+  const c = STATUS_COLOR[status] || STATUS_COLOR.MENUNGGU
+  return <span style={{ background:c.bg, color:c.text, fontSize:11, fontWeight:700, padding:'3px 10px', borderRadius:99 }}>{c.label}</span>
+}
+
+const BtnGrad = ({ children, onClick, disabled=false, small=false, outline=false, color='red' }) => {
+  const bg = color==='green' ? 'linear-gradient(135deg,#43A047,#66BB6A)' : color==='orange' ? 'linear-gradient(135deg,#F5A623,#FFB300)' : 'linear-gradient(135deg,#E53935,#F5A623)'
+  const borderC = color==='green'?'#43A047':color==='orange'?'#F5A623':'#E53935'
+  if (outline) return (
+    <button onClick={onClick} disabled={disabled} style={{ border:`2px solid ${borderC}`, color:borderC, background:'transparent', padding:small?'8px 16px':'14px 20px', borderRadius:14, fontWeight:700, fontSize:13, width:small?'auto':'100%', opacity:disabled?0.4:1, cursor:'pointer' }}>{children}</button>
+  )
+  return (
+    <button onClick={onClick} disabled={disabled} style={{ background:bg, color:'white', border:'none', padding:small?'8px 16px':'14px 20px', borderRadius:14, fontWeight:700, fontSize:small?12:14, width:small?'auto':'100%', opacity:disabled?0.4:1, cursor:'pointer', boxShadow:'0 4px 12px rgba(229,57,53,0.25)' }}>{children}</button>
+  )
+}
+
+const Card = ({ children, style={}, onClick }) => (
+  <div onClick={onClick} style={{ background:'white', borderRadius:16, boxShadow:'0 4px 16px rgba(0,0,0,0.06)', ...style }}>{children}</div>
+)
+
+const Modal = ({ title, children, onClose, wide=false }) => (
+  <div style={{ position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:100,display:'flex',alignItems:'flex-end',justifyContent:'center' }} onClick={e=>{ if(e.target===e.currentTarget) onClose() }}>
+    <div style={{ background:'white',borderRadius:'24px 24px 0 0',width:'100%',maxWidth:wide?480:430,maxHeight:'85vh',overflowY:'auto',padding:24 }}>
+      <div style={{ display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:20 }}>
+        <h2 style={{ fontWeight:800,fontSize:16,margin:0 }}>{title}</h2>
+        <button onClick={onClose} style={{ background:'#f5f5f5',border:'none',borderRadius:'50%',width:32,height:32,cursor:'pointer',fontSize:16 }}>✕</button>
+      </div>
+      {children}
+    </div>
+  </div>
+)
+
+const Loader = () => (
+  <div style={{ display:'flex',alignItems:'center',justifyContent:'center',padding:40 }}>
+    <div style={{ width:32,height:32,borderRadius:'50%',border:'3px solid #f5f5f5',borderTop:'3px solid #E53935',animation:'spin 0.8s linear infinite' }}/>
+    <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+  </div>
+)
+
+// ─── NOTIFICATION BELL ────────────────────────────────────────────────────────
+const NotifBell = ({ nip, onOpen, notifications }) => {
+  const unread = notifications.filter(n => n.nip === nip && !n.is_read).length
+  return (
+    <button onClick={onOpen} style={{ position:'relative',background:'#f5f5f5',border:'none',borderRadius:'50%',width:38,height:38,display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',fontSize:16,flexShrink:0 }}>
+      🔔
+      {unread>0 && <span style={{ position:'absolute',top:4,right:4,width:14,height:14,background:'#E53935',borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',color:'white',fontSize:9,fontWeight:700 }}>{unread}</span>}
+    </button>
+  )
+}
+
+const NotifPanel = ({ nip, onClose, notifications, onMarkRead }) => {
+  const myNotifs = notifications.filter(n => n.nip === nip)
+  return (
+    <Modal title="Notifikasi" onClose={onClose}>
+      {myNotifs.length===0 ? <p style={{ textAlign:'center',color:'#aaa',padding:24,fontSize:13 }}>Tidak ada notifikasi</p>
+      : myNotifs.map(n=>(
+        <div key={n.id} onClick={()=>onMarkRead(n.id)} style={{ display:'flex',gap:12,padding:'12px 0',borderBottom:'1px solid #f5f5f5',cursor:'pointer',opacity:n.is_read?0.5:1 }}>
+          <div style={{ width:36,height:36,borderRadius:10,background:'#FFF8E1',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0 }}>
+            {n.type==='IZIN'?'📋':n.type==='GAJI'?'💰':n.type==='APPROVAL'?'✅':'📣'}
+          </div>
+          <div style={{ flex:1 }}>
+            <p style={{ fontSize:13,fontWeight:n.is_read?400:700,margin:'0 0 2px',color:'#333' }}>{n.message}</p>
+            <p style={{ fontSize:11,color:'#aaa',margin:0 }}>{new Date(n.created_at).toLocaleString('id-ID')}</p>
+          </div>
+          {!n.is_read && <div style={{ width:8,height:8,borderRadius:'50%',background:'#E53935',marginTop:6,flexShrink:0 }}/>}
+        </div>
+      ))}
+    </Modal>
+  )
+}
+
+// ─── CAMERA MODAL ─────────────────────────────────────────────────────────────
+const CameraModal = ({ mode, onCapture, onClose }) => {
+  const videoRef = useRef(null)
+  const canvasRef = useRef(null)
+  const streamRef = useRef(null)
+  const [ready, setReady] = useState(false)
+  const [captured, setCaptured] = useState(null)
+  const [err, setErr] = useState('')
+
+  useEffect(() => {
+    navigator.mediaDevices?.getUserMedia({ video: { facingMode: mode==='selfie'?'user':'environment' } })
+      .then(s => { streamRef.current = s; if(videoRef.current){ videoRef.current.srcObject = s; setReady(true) } })
+      .catch(() => setErr('Kamera tidak dapat diakses'))
+    return () => streamRef.current?.getTracks().forEach(t=>t.stop())
+  }, [mode])
+
+  const capture = () => {
+    const v = videoRef.current; const c = canvasRef.current
+    if(!v||!c) return
+    c.width = v.videoWidth; c.height = v.videoHeight
+    c.getContext('2d').drawImage(v, 0, 0)
+    setCaptured(c.toDataURL('image/jpeg', 0.8))
+    streamRef.current?.getTracks().forEach(t=>t.stop())
+  }
+
+  return (
+    <Modal title={mode==='selfie'?'Selfie Verifikasi':'Ambil Foto'} onClose={onClose}>
+      {err ? <p style={{ textAlign:'center',color:'#E53935',padding:24 }}>{err}</p>
+      : captured ? (
+        <div>
+          <img src={captured} alt="capture" style={{ width:'100%',borderRadius:14,marginBottom:12 }}/>
+          <div style={{ display:'flex',gap:8 }}>
+            <BtnGrad small outline onClick={()=>{ setCaptured(null); }}>Ulang</BtnGrad>
+            <BtnGrad small color="green" onClick={()=>{ onCapture(captured); onClose() }}>Gunakan</BtnGrad>
+          </div>
+        </div>
+      ) : (
+        <div>
+          <video ref={videoRef} autoPlay playsInline muted style={{ width:'100%',borderRadius:14,background:'#000',marginBottom:12,maxHeight:280,objectFit:'cover' }}/>
+          <canvas ref={canvasRef} style={{ display:'none' }}/>
+          <BtnGrad onClick={capture} disabled={!ready}>📷 Ambil Foto</BtnGrad>
+        </div>
+      )}
+    </Modal>
+  )
+}
+
+// ─── EMPLOYEE HOME ─────────────────────────────────────────────────────────────
+const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
+  const [camera, setCamera] = useState(null)
+  const [fotoMasuk, setFotoMasuk] = useState(null)
+  const [fotoKeluar, setFotoKeluar] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [showNotif, setShowNotif] = useState(false)
+  const [showAnnouncements, setShowAnnouncements] = useState(false)
+  const [showHandbook, setShowHandbook] = useState(false)
+  const [selectedAnn, setSelectedAnn] = useState(null)
+
+  const today = new Date().toISOString().split('T')[0]
+  const todayAtt = dbData.attendance.find(a => a.nip === user.nip && a.tanggal === today)
+  const myAtt = dbData.attendance.filter(a => a.nip === user.nip).slice(0,10)
+
+  const clockIn = async () => {
+    if (!fotoMasuk) { showToast('⚠️ Ambil selfie dulu'); return }
+    setLoading(true)
+    const now = new Date()
+    const jam = now.toTimeString().slice(0,5)
+    const menit = now.getHours()>=8 ? Math.max(0,(now.getHours()-8)*60+now.getMinutes()) : 0
+    const status = menit>0 ? 'TERLAMBAT' : 'HADIR'
+    const { error } = await supabase.from('attendance').insert({
+      nip: user.nip, nama: user.nama, tanggal: today, jam_masuk: jam,
+      status_kehadiran: status, menit_terlambat: menit,
+      lokasi_masuk: 'Kantor', foto_masuk: fotoMasuk, status_validasi: 'MENUNGGU'
+    })
+    if (error) { showToast('❌ Gagal clock in'); console.error(error) }
+    else {
+      await supabase.from('audit_log').insert({ user_name:user.nama, nip:user.nip, aktivitas:'Clock In', keterangan:`${jam} - ${status}` })
+      showToast('✅ Clock In berhasil!')
+      setFotoMasuk(null)
+      refreshData()
+    }
+    setLoading(false)
+  }
+
+  const clockOut = async () => {
+    if (!todayAtt) return
+    if (!fotoKeluar) { showToast('⚠️ Ambil foto dulu'); return }
+    setLoading(true)
+    const now = new Date()
+    const jam = now.toTimeString().slice(0,5)
+    const masukTime = new Date(`${today}T${todayAtt.jam_masuk}`)
+    const durMenit = Math.round((now - masukTime)/60000)
+    const lemburJam = Math.max(0, (durMenit - 540)/60)
+    const durStr = `${Math.floor(durMenit/60)}j ${durMenit%60}m`
+    const { error } = await supabase.from('attendance').update({
+      jam_keluar: jam, durasi: durStr, jam_lembur: Math.round(lemburJam*100)/100, foto_keluar: fotoKeluar
+    }).eq('id', todayAtt.id)
+    if (error) { showToast('❌ Gagal clock out'); console.error(error) }
+    else {
+      await supabase.from('audit_log').insert({ user_name:user.nama, nip:user.nip, aktivitas:'Clock Out', keterangan:jam })
+      showToast('✅ Clock Out berhasil!')
+      setFotoKeluar(null)
+      refreshData()
+    }
+    setLoading(false)
+  }
+
+  const emp = dbData.karyawan.find(k => k.nip === user.nip) || user
+  const hasClockIn = !!todayAtt?.jam_masuk
+  const hasClockOut = !!todayAtt?.jam_keluar
+
+  return (
+    <div style={{ flex:1, overflowY:'auto', paddingBottom:80, background:'#F8F8F8' }}>
+      {/* Header */}
+      <div style={{ background:'linear-gradient(135deg,#E53935,#F5A623)', padding:'32px 16px 50px', position:'relative', overflow:'hidden' }}>
+        <div style={{ position:'absolute',top:-30,right:-30,width:120,height:120,borderRadius:'50%',background:'rgba(255,255,255,0.1)' }}/>
+        <div style={{ position:'absolute',bottom:-20,left:-20,width:80,height:80,borderRadius:'50%',background:'rgba(255,255,255,0.08)' }}/>
+        <div style={{ display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:16 }}>
+          <div style={{ display:'flex',alignItems:'center',gap:8 }}>
+            <WellJoyLogo size={36}/>
+            <span style={{ color:'white',fontWeight:800,fontSize:15 }}>WellJoy HRIS</span>
+          </div>
+          <NotifBell nip={user.nip} onOpen={()=>setShowNotif(true)} notifications={dbData.notifications}/>
+        </div>
+        <p style={{ color:'rgba(255,255,255,0.85)',fontSize:13,margin:'0 0 4px' }}>Halo,</p>
+        <h1 style={{ color:'white',fontWeight:800,fontSize:20,margin:'0 0 4px' }}>{user.nama} 👋</h1>
+        <p style={{ color:'rgba(255,255,255,0.75)',fontSize:12,margin:0 }}>{emp.jabatan||''} · {emp.divisi||''}</p>
+      </div>
+
+      <div style={{ padding:'0 16px', marginTop:-30, display:'flex', flexDirection:'column', gap:12 }}>
+        {/* Clock In/Out Card */}
+        <Card style={{ padding:20 }}>
+          <div style={{ display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:16 }}>
+            <div>
+              <p style={{ fontWeight:800,fontSize:15,margin:0 }}>Absensi Hari Ini</p>
+              <p style={{ fontSize:12,color:'#aaa',margin:'2px 0 0' }}>{new Date().toLocaleDateString('id-ID',{weekday:'long',day:'numeric',month:'long'})}</p>
+            </div>
+            {todayAtt && <Chip status={todayAtt.status_kehadiran}/>}
+          </div>
+          <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:16 }}>
+            {[['Masuk', todayAtt?.jam_masuk||'-', '#E8F5E9','#2E7D32'],['Keluar', todayAtt?.jam_keluar||'-','#FFF5F5','#C62828']].map(([l,v,bg,c])=>(
+              <div key={l} style={{ background:bg,borderRadius:12,padding:'12px 16px',textAlign:'center' }}>
+                <p style={{ fontSize:11,color:'#aaa',margin:'0 0 4px' }}>{l}</p>
+                <p style={{ fontSize:20,fontWeight:800,color:c,margin:0 }}>{v}</p>
+              </div>
+            ))}
+          </div>
+          {!hasClockIn && (
+            <div>
+              {fotoMasuk
+                ? <div style={{ marginBottom:10 }}><img src={fotoMasuk} alt="" style={{ width:'100%',borderRadius:10,maxHeight:140,objectFit:'cover' }}/></div>
+                : <div onClick={()=>setCamera({mode:'selfie',cb:setFotoMasuk})} style={{ border:'2px dashed #F5A623',borderRadius:12,padding:14,textAlign:'center',cursor:'pointer',marginBottom:10,color:'#F5A623',fontWeight:700,fontSize:13 }}>📷 Selfie untuk Clock In</div>
+              }
+              <BtnGrad onClick={clockIn} disabled={loading||!fotoMasuk}>{loading?'Memproses...':'Clock In'}</BtnGrad>
+            </div>
+          )}
+          {hasClockIn && !hasClockOut && (
+            <div>
+              {fotoKeluar
+                ? <div style={{ marginBottom:10 }}><img src={fotoKeluar} alt="" style={{ width:'100%',borderRadius:10,maxHeight:140,objectFit:'cover' }}/></div>
+                : <div onClick={()=>setCamera({mode:'env',cb:setFotoKeluar})} style={{ border:'2px dashed #E53935',borderRadius:12,padding:14,textAlign:'center',cursor:'pointer',marginBottom:10,color:'#E53935',fontWeight:700,fontSize:13 }}>📷 Foto untuk Clock Out</div>
+              }
+              <BtnGrad onClick={clockOut} disabled={loading||!fotoKeluar} color="orange">{loading?'Memproses...':'Clock Out'}</BtnGrad>
+            </div>
+          )}
+          {hasClockIn && hasClockOut && (
+            <div style={{ textAlign:'center',padding:'8px 0',color:'#2E7D32',fontWeight:700,fontSize:14 }}>✅ Absensi selesai hari ini</div>
+          )}
+        </Card>
+
+        {/* Stats Row */}
+        <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:10 }}>
+          {[
+            ['🌴','Sisa Izin',`${emp.sisa_izin??0} hari`,'#FFF8E1','#F57F17'],
+            ['📅','Hadir Bulan Ini', `${dbData.attendance.filter(a=>a.nip===user.nip&&a.status_kehadiran==='HADIR'&&new Date(a.tanggal).getMonth()===new Date().getMonth()).length} hari`,'#E8F5E9','#2E7D32'],
+            ['⚠️','Terlambat',`${dbData.attendance.filter(a=>a.nip===user.nip&&a.status_kehadiran==='TERLAMBAT'&&new Date(a.tanggal).getMonth()===new Date().getMonth()).length}x`,'#FFEBEE','#C62828'],
+          ].map(([icon,lbl,val,bg,c])=>(
+            <Card key={lbl} style={{ padding:'12px 10px',textAlign:'center',background:bg,boxShadow:'none',border:'none' }}>
+              <span style={{ fontSize:20 }}>{icon}</span>
+              <p style={{ fontSize:10,color:'#888',margin:'4px 0 2px',lineHeight:1.2 }}>{lbl}</p>
+              <p style={{ fontSize:14,fontWeight:800,color:c,margin:0 }}>{val}</p>
+            </Card>
+          ))}
+        </div>
+
+        {/* Quick links */}
+        <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:10 }}>
+          {[
+            ['📣','Pengumuman','Berita terkini',()=>setShowAnnouncements(true)],
+            ['📖','Handbook','Panduan perusahaan',()=>setShowHandbook(true)],
+          ].map(([icon,lbl,sub,fn])=>(
+            <button key={lbl} onClick={fn} style={{ display:'flex',alignItems:'center',gap:10,padding:14,background:'white',borderRadius:14,border:'none',cursor:'pointer',boxShadow:'0 4px 16px rgba(0,0,0,0.06)',textAlign:'left' }}>
+              <span style={{ fontSize:22 }}>{icon}</span>
+              <div><p style={{ fontWeight:700,fontSize:13,margin:0 }}>{lbl}</p><p style={{ fontSize:11,color:'#aaa',margin:0 }}>{sub}</p></div>
+            </button>
+          ))}
+        </div>
+
+        {/* Riwayat Absen */}
+        <Card style={{ padding:16 }}>
+          <p style={{ fontWeight:800,margin:'0 0 12px' }}>Riwayat Absen</p>
+          {myAtt.length===0 ? <p style={{ textAlign:'center',color:'#aaa',fontSize:13,padding:16 }}>Belum ada data absensi</p>
+          : myAtt.map((a,i)=>(
+            <div key={i} style={{ display:'flex',alignItems:'center',gap:12,padding:'10px 0',borderBottom:i<myAtt.length-1?'1px solid #f5f5f5':'none' }}>
+              <div style={{ width:36,height:36,borderRadius:10,background:STATUS_COLOR[a.status_kehadiran]?.bg||'#f5f5f5',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0 }}>
+                <span style={{ fontSize:11,fontWeight:700,color:STATUS_COLOR[a.status_kehadiran]?.text }}>{a.tanggal?.slice(8,10)}</span>
+              </div>
+              <div style={{ flex:1 }}>
+                <p style={{ fontSize:12,fontWeight:600,margin:0,color:'#333' }}>{a.tanggal}</p>
+                <p style={{ fontSize:11,color:'#aaa',margin:0 }}>{a.jam_masuk||'-'} → {a.jam_keluar||'-'}</p>
+              </div>
+              <Chip status={a.status_kehadiran}/>
+            </div>
+          ))}
+        </Card>
+
+        <button onClick={onLogout} style={{ padding:14,borderRadius:14,color:'#E53935',fontWeight:700,fontSize:14,border:'2px solid #FFCDD2',background:'white',cursor:'pointer',marginTop:4,width:'100%' }}>← Keluar</button>
+      </div>
+
+      {camera && <CameraModal mode={camera.mode} onCapture={foto=>{ camera.cb(foto); setCamera(null) }} onClose={()=>setCamera(null)}/>}
+      {showNotif && <NotifPanel nip={user.nip} onClose={()=>setShowNotif(false)} notifications={dbData.notifications} onMarkRead={async(id)=>{ await supabase.from('notifications').update({is_read:true}).eq('id',id); refreshData() }}/>}
+
+      {showAnnouncements && (
+        <Modal title="Pengumuman HRD" onClose={()=>{ setShowAnnouncements(false); setSelectedAnn(null) }}>
+          {selectedAnn ? (
+            <div>
+              <button onClick={()=>setSelectedAnn(null)} style={{ background:'none',border:'none',color:'#E53935',fontSize:13,fontWeight:700,cursor:'pointer',marginBottom:12,padding:0 }}>← Kembali</button>
+              <div style={{ background:'#FFF3E0',borderRadius:12,padding:14,marginBottom:12 }}>
+                <span style={{ fontSize:11,padding:'2px 8px',borderRadius:99,background:'#FFE0B2',color:'#E65100',fontWeight:700 }}>{selectedAnn.type}</span>
+                <p style={{ fontWeight:800,fontSize:15,margin:'8px 0 4px' }}>{selectedAnn.judul}</p>
+                <p style={{ fontSize:11,color:'#aaa',margin:0 }}>Oleh {selectedAnn.created_by} · {selectedAnn.tanggal}</p>
+              </div>
+              <p style={{ fontSize:13,color:'#444',lineHeight:1.6 }}>{selectedAnn.isi}</p>
+            </div>
+          ) : dbData.announcements.map(a=>(
+            <div key={a.id} onClick={()=>setSelectedAnn(a)} style={{ padding:14,borderRadius:14,border:'1px solid #f0f0f0',marginBottom:10,cursor:'pointer' }}>
+              <div style={{ display:'flex',alignItems:'center',gap:8,marginBottom:6 }}>
+                <span style={{ fontSize:11,padding:'2px 8px',borderRadius:99,background:a.type==='LIBUR'?'#E3F2FD':'#FFF8E1',color:a.type==='LIBUR'?'#1565C0':'#F57F17',fontWeight:700 }}>{a.type}</span>
+                <span style={{ fontSize:11,color:'#aaa' }}>{a.tanggal}</span>
+              </div>
+              <p style={{ fontWeight:700,fontSize:13,margin:0 }}>{a.judul}</p>
+              <p style={{ fontSize:12,color:'#888',margin:'4px 0 0',display:'-webkit-box',WebkitLineClamp:2,WebkitBoxOrient:'vertical',overflow:'hidden' }}>{a.isi}</p>
+            </div>
+          ))}
+        </Modal>
+      )}
+
+      {showHandbook && (
+        <Modal title="Handbook Perusahaan" onClose={()=>setShowHandbook(false)} wide>
+          {dbData.handbook.length===0 ? <p style={{ textAlign:'center',color:'#aaa',padding:24,fontSize:13 }}>Belum ada handbook tersedia.</p>
+          : dbData.handbook.map(hb=>(
+            <div key={hb.id} style={{ border:'1px solid #f0f0f0',borderRadius:14,padding:16,marginBottom:12 }}>
+              <div style={{ display:'flex',alignItems:'center',gap:8,marginBottom:8 }}>
+                <div style={{ width:32,height:32,borderRadius:10,background:'#E8F5E9',display:'flex',alignItems:'center',justifyContent:'center',fontSize:16 }}>📖</div>
+                <div style={{ flex:1 }}><p style={{ fontWeight:700,fontSize:14,margin:0 }}>{hb.judul}</p><p style={{ fontSize:10,color:'#aaa',margin:0 }}>Diperbarui: {hb.updated_at}</p></div>
+              </div>
+              <p style={{ fontSize:13,color:'#555',lineHeight:1.6,margin:0 }}>{hb.isi}</p>
+            </div>
+          ))}
+        </Modal>
+      )}
+    </div>
+  )
+}
+
+// ─── EMPLOYEE IZIN ─────────────────────────────────────────────────────────────
+const EmpIzin = ({ user, onAjukan, dbData }) => {
+  const [tab, setTab] = useState('Semua')
+  const tabMap = { Semua:null, Menunggu:'MENUNGGU', Disetujui:'DISETUJUI', Ditolak:'DITOLAK' }
+  const data = dbData.izin.filter(c => c.nip===user.nip && (tab==='Semua'||c.status===tabMap[tab]))
+  const emp = dbData.karyawan.find(k=>k.nip===user.nip)||user
+  return (
+    <div style={{ flex:1,overflowY:'auto',paddingBottom:80,background:'#F8F8F8' }}>
+      <div style={{ padding:'24px 16px 12px' }}>
+        <h1 style={{ fontWeight:800,fontSize:18,margin:0 }}>Izin</h1>
+        <p style={{ fontSize:11,color:'#aaa',margin:0 }}>Pengajuan & riwayat izin</p>
+      </div>
+      <div style={{ padding:'0 16px',display:'flex',flexDirection:'column',gap:12 }}>
+        <Card style={{ padding:16,display:'flex',alignItems:'center',justifyContent:'space-between' }}>
+          <div><p style={{ fontSize:13,color:'#777',margin:0 }}>Sisa Izin Tahunan</p><p style={{ fontSize:32,fontWeight:800,color:'#F5A623',margin:'4px 0 0' }}>{emp.sisa_izin??0} Hari</p></div>
+          <span style={{ fontSize:48,opacity:0.2 }}>🌴</span>
+        </Card>
+        <button onClick={onAjukan} style={{ display:'flex',alignItems:'center',gap:12,padding:16,background:'white',borderRadius:16,border:'none',cursor:'pointer',boxShadow:'0 4px 16px rgba(0,0,0,0.06)' }}>
+          <div style={{ width:40,height:40,borderRadius:12,background:'#FFE4E1',display:'flex',alignItems:'center',justifyContent:'center' }}>📋</div>
+          <div style={{ textAlign:'left',flex:1 }}><p style={{ fontWeight:700,fontSize:13,color:'#E53935',margin:0 }}>Ajukan Izin Baru</p><p style={{ fontSize:11,color:'#aaa',margin:0 }}>Buat pengajuan izin</p></div>
+          <span style={{ color:'#ccc',fontSize:18 }}>›</span>
+        </button>
+        <Card>
+          <div style={{ display:'flex',borderBottom:'1px solid #f0f0f0' }}>
+            {['Semua','Menunggu','Disetujui','Ditolak'].map(t=>(
+              <button key={t} onClick={()=>setTab(t)} style={{ flex:1,padding:'12px 0',fontSize:12,fontWeight:700,border:'none',borderBottom:tab===t?'2px solid #E53935':'2px solid transparent',color:tab===t?'#E53935':'#aaa',background:'transparent',cursor:'pointer' }}>{t}</button>
+            ))}
+          </div>
+          {data.length===0 ? <p style={{ textAlign:'center',color:'#aaa',padding:24,fontSize:13 }}>Tidak ada data</p>
+          : data.map((c,i)=>(
+            <div key={i} style={{ display:'flex',alignItems:'center',gap:12,padding:16,borderBottom:'1px solid #f9f9f9' }}>
+              <div style={{ width:40,height:40,borderRadius:12,background:'#FFE4E1',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0 }}>📅</div>
+              <div style={{ flex:1 }}><p style={{ fontWeight:700,fontSize:13,margin:0 }}>{c.jenis_izin}</p><p style={{ fontSize:11,color:'#aaa',margin:0 }}>{c.tanggal_mulai} – {c.tanggal_selesai} · {c.jumlah_hari} hari</p></div>
+              <Chip status={c.status}/>
+            </div>
+          ))}
+        </Card>
+      </div>
+    </div>
+  )
+}
+
+// ─── EMPLOYEE AJUKAN IZIN ─────────────────────────────────────────────────────
+const EmpAjukanIzin = ({ user, showToast, onBack, refreshData }) => {
+  const [form, setForm] = useState({ jenis:'', mulai:'', selesai:'', alasan:'' })
+  const [selfie, setSelfie] = useState(null)
+  const [lampiran, setLampiran] = useState(null)
+  const [showCamera, setShowCamera] = useState(false)
+  const [err, setErr] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [ok, setOk] = useState(false)
+  const fileRef = useRef(null)
+  const set = k => e => setForm({...form,[k]:e.target.value})
+  const hari = () => { if(!form.mulai||!form.selesai) return 0; const d=Math.ceil((new Date(form.selesai)-new Date(form.mulai))/86400000)+1; return d>0?d:0 }
+
+  const submit = async () => {
+    setErr('')
+    if(!form.jenis||!form.mulai||!form.selesai||!form.alasan){ setErr('Semua field wajib diisi'); return }
+    if(!selfie){ setErr('Selfie verifikasi wajib dilakukan'); return }
+    setLoading(true)
+    const { error } = await supabase.from('izin').insert({
+      nip: user.nip, nama: user.nama, jabatan: user.jabatan||'',
+      jenis_izin: form.jenis, tanggal_mulai: form.mulai,
+      tanggal_selesai: form.selesai, jumlah_hari: hari(),
+      keterangan: form.alasan, status: 'MENUNGGU',
+      diajukan_pada: new Date().toISOString().split('T')[0],
+      selfie_url: selfie,
+      lampiran_nama: lampiran?.name||''
+    })
+    if (error) { setErr('Gagal mengirim. Coba lagi.'); console.error(error) }
+    else {
+      await supabase.from('audit_log').insert({ user_name:user.nama, nip:user.nip, aktivitas:`Pengajuan izin ${form.mulai} – ${form.selesai}`, keterangan:`Jenis: ${form.jenis}, ${hari()} hari` })
+      await supabase.from('notifications').insert({ nip:'20001', type:'APPROVAL', message:`${user.nama} mengajukan izin ${hari()} hari (${form.jenis})` })
+      setOk(true)
+      refreshData()
+    }
+    setLoading(false)
+  }
+
+  if(ok) return (
+    <div style={{ flex:1,display:'flex',alignItems:'center',justifyContent:'center',padding:16,background:'#F8F8F8' }}>
+      <Card style={{ padding:32,width:'100%',maxWidth:360,textAlign:'center' }}>
+        <div style={{ fontSize:48,marginBottom:12 }}>✅</div>
+        <h2 style={{ fontWeight:700,margin:'0 0 8px' }}>Pengajuan Terkirim!</h2>
+        <p style={{ color:'#888',fontSize:13,marginBottom:24 }}>Menunggu persetujuan HRD.</p>
+        <BtnGrad onClick={onBack}>Kembali</BtnGrad>
+      </Card>
+    </div>
+  )
+
+  return (
+    <div style={{ flex:1,overflowY:'auto',paddingBottom:80,background:'#F8F8F8' }}>
+      <div style={{ display:'flex',alignItems:'center',gap:8,padding:'24px 16px 12px' }}>
+        <button onClick={onBack} style={{ background:'none',border:'none',color:'#E53935',fontSize:20,cursor:'pointer' }}>←</button>
+        <h1 style={{ fontWeight:800,fontSize:18,margin:0 }}>Ajukan Izin</h1>
+      </div>
+      <div style={{ padding:'0 16px',display:'flex',flexDirection:'column',gap:12 }}>
+        {err && <div style={{ background:'#FFF5F5',border:'1px solid #FFCDD2',color:'#C62828',fontSize:13,padding:'10px 14px',borderRadius:12 }}>{err}</div>}
+        <Card style={{ padding:20,display:'flex',flexDirection:'column',gap:14 }}>
+          <div>
+            <label style={{ fontSize:12,fontWeight:700,color:'#666',display:'block',marginBottom:8 }}>Jenis Izin</label>
+            <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:10 }}>
+              {['Izin Sakit','Izin Lainnya'].map(j=>(
+                <button key={j} onClick={()=>setForm({...form,jenis:j})} style={{ padding:'14px 8px',borderRadius:14,border:`2px solid ${form.jenis===j?'#E53935':'#e0e0e0'}`,background:form.jenis===j?'#FFF5F5':'white',cursor:'pointer',fontWeight:700,fontSize:13,color:form.jenis===j?'#E53935':'#888' }}>
+                  {j==='Izin Sakit'?'🏥':'📋'}<br/><span style={{ fontSize:12 }}>{j}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+          {[['Tanggal Mulai','mulai'],['Tanggal Selesai','selesai']].map(([lbl,k])=>(
+            <div key={k}><label style={{ fontSize:12,fontWeight:700,color:'#666',display:'block',marginBottom:6 }}>{lbl}</label>
+              <input type="date" value={form[k]} onChange={set(k)} style={{ width:'100%',border:'1px solid #e0e0e0',borderRadius:12,padding:'10px 12px',fontSize:13,outline:'none',boxSizing:'border-box' }}/>
+            </div>
+          ))}
+          <div><label style={{ fontSize:12,fontWeight:700,color:'#666',display:'block',marginBottom:6 }}>Jumlah Hari</label>
+            <div style={{ border:'1px solid #e0e0e0',borderRadius:12,padding:'10px 12px',background:'#fafafa',fontSize:13,fontWeight:700,color:'#555' }}>{hari()} hari</div>
+          </div>
+          <div><label style={{ fontSize:12,fontWeight:700,color:'#666',display:'block',marginBottom:6 }}>Alasan</label>
+            <textarea value={form.alasan} onChange={set('alasan')} rows={3} maxLength={200} placeholder="Tuliskan alasan izin..." style={{ width:'100%',border:'1px solid #e0e0e0',borderRadius:12,padding:'10px 12px',fontSize:13,outline:'none',resize:'none',boxSizing:'border-box' }}/>
+          </div>
+        </Card>
+        <Card style={{ padding:16 }}>
+          <div style={{ display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10 }}>
+            <div><p style={{ fontWeight:700,margin:0 }}>📷 Selfie Verifikasi</p><p style={{ fontSize:11,color:'#aaa',margin:0 }}>Wajib untuk konfirmasi identitas</p></div>
+            {!selfie ? <BtnGrad small onClick={()=>setShowCamera(true)}>Ambil Selfie</BtnGrad> : <BtnGrad small outline color="red" onClick={()=>setSelfie(null)}>Ulangi</BtnGrad>}
+          </div>
+          {selfie && <img src={selfie} alt="selfie" style={{ width:'100%',borderRadius:12,maxHeight:180,objectFit:'cover' }}/>}
+          {!selfie && <div style={{ border:'2px dashed #e0e0e0',borderRadius:12,padding:20,textAlign:'center',color:'#ccc',fontSize:13 }}>Belum ada selfie</div>}
+        </Card>
+        <Card style={{ padding:16 }}>
+          <div style={{ display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10 }}>
+            <div><p style={{ fontWeight:700,margin:0 }}>📎 Lampiran Bukti</p><p style={{ fontSize:11,color:'#aaa',margin:0 }}>{form.jenis==='Izin Sakit'?'Surat dokter wajib':'Dokumen pendukung'}</p></div>
+            <BtnGrad small onClick={()=>fileRef.current.click()}>{lampiran?'Ganti':'Upload'}</BtnGrad>
+          </div>
+          <input ref={fileRef} type="file" accept="image/*,.pdf" style={{ display:'none' }} onChange={e=>{ if(e.target.files[0]) setLampiran(e.target.files[0]) }}/>
+          {lampiran ? <div style={{ display:'flex',alignItems:'center',gap:10,background:'#F0FFF4',padding:'10px 14px',borderRadius:10 }}><span>📄</span><span style={{ fontSize:12,fontWeight:600,color:'#2E7D32' }}>{lampiran.name}</span></div>
+          : <div style={{ border:'2px dashed #e0e0e0',borderRadius:12,padding:20,textAlign:'center',color:'#ccc',fontSize:13 }}>Belum ada lampiran</div>}
+        </Card>
+        <BtnGrad onClick={submit} disabled={loading}>{loading?'Mengirim...':'Ajukan Izin'}</BtnGrad>
+      </div>
+      {showCamera && <CameraModal mode="selfie" onCapture={foto=>setSelfie(foto)} onClose={()=>setShowCamera(false)}/>}
+    </div>
+  )
+}
+
+// ─── EMPLOYEE SLIP GAJI ───────────────────────────────────────────────────────
+const EmpSlipGaji = ({ user, dbData }) => {
+  const [bulan, setBulan] = useState(new Date().getMonth())
+  const [tahun, setTahun] = useState(new Date().getFullYear())
+  const [tab, setTab] = useState('Ringkasan')
+  const emp = dbData.karyawan.find(k=>k.nip===user.nip)||user
+  const records = dbData.attendance.filter(a=>{
+    const d = new Date(a.tanggal)
+    return a.nip===user.nip && d.getMonth()===bulan && d.getFullYear()===tahun
+  })
+  const p = calcPayroll(emp, records)
+
+  return (
+    <div style={{ flex:1,overflowY:'auto',paddingBottom:80,background:'#F8F8F8' }}>
+      <div style={{ padding:'24px 16px 0' }}>
+        <h1 style={{ fontWeight:800,fontSize:18,margin:0 }}>Slip Gaji</h1>
+        <p style={{ fontSize:11,color:'#aaa',margin:0 }}>Rincian gaji berdasarkan absensi</p>
+      </div>
+      <div style={{ display:'flex',borderBottom:'1px solid #e0e0e0',background:'white',marginBottom:0 }}>
+        {['Ringkasan','Riwayat'].map(t=><button key={t} onClick={()=>setTab(t)} style={{ flex:1,padding:'12px 0',fontSize:13,fontWeight:700,border:'none',borderBottom:tab===t?'2px solid #E53935':'2px solid transparent',color:tab===t?'#E53935':'#aaa',background:'transparent',cursor:'pointer' }}>{t}</button>)}
+      </div>
+      <div style={{ padding:'12px 16px',display:'flex',flexDirection:'column',gap:12 }}>
+        <div style={{ display:'flex',gap:8 }}>
+          <select value={bulan} onChange={e=>setBulan(Number(e.target.value))} style={{ flex:1,background:'white',border:'1px solid #e0e0e0',borderRadius:12,padding:'10px 12px',fontSize:13,outline:'none' }}>
+            {BNAME.map((b,i)=><option key={i} value={i}>{b}</option>)}
+          </select>
+          <select value={tahun} onChange={e=>setTahun(Number(e.target.value))} style={{ width:80,background:'white',border:'1px solid #e0e0e0',borderRadius:12,padding:'10px 12px',fontSize:13,outline:'none' }}>
+            {[2024,2025,2026].map(y=><option key={y}>{y}</option>)}
+          </select>
+        </div>
+
+        {tab==='Ringkasan' && (
+          <>
+            <Card style={{ padding:20,background:'linear-gradient(135deg,#E53935,#F5A623)' }}>
+              <p style={{ color:'rgba(255,255,255,0.8)',fontSize:12,margin:'0 0 4px' }}>Take Home Pay · {BNAME[bulan]} {tahun}</p>
+              <p style={{ color:'white',fontWeight:800,fontSize:28,margin:0 }}>{formatRp(p.takeHomePay)}</p>
+            </Card>
+            <Card style={{ padding:16 }}>
+              <p style={{ fontWeight:700,fontSize:13,margin:'0 0 12px',color:'#2E7D32' }}>📊 Rekap Kehadiran</p>
+              {[['Hadir',p.hadir],['Terlambat',p.terlambat],['WFH',p.wfh],['Izin Sakit',p.izinSakit],['Izin Lainnya',p.izinLain],['Alpha',p.alpha]].map(([k,v])=>(
+                <div key={k} style={{ display:'flex',justifyContent:'space-between',padding:'7px 0',borderBottom:'1px solid #f5f5f5',fontSize:13 }}>
+                  <span style={{ color:'#777' }}>{k}</span><span style={{ fontWeight:700 }}>{v} hari</span>
+                </div>
+              ))}
+            </Card>
+            <Card style={{ padding:16 }}>
+              <p style={{ fontWeight:700,fontSize:13,margin:'0 0 12px',color:'#2E7D32' }}>💰 Penghasilan</p>
+              {[['Gaji Pokok',emp.gaji_pokok||0],['Tunjangan Jabatan',emp.tunjangan_jabatan||0],['Tunjangan Transport',emp.tunjangan_transport||0],['Tunjangan Makan',emp.tunjangan_makan||0],['Bonus Lembur',p.bonusLembur]].map(([k,v])=>(
+                <div key={k} style={{ display:'flex',justifyContent:'space-between',padding:'7px 0',borderBottom:'1px solid #f5f5f5',fontSize:13 }}>
+                  <span style={{ color:'#777' }}>{k}</span><span style={{ fontWeight:600,color:'#2E7D32' }}>{formatRp(v)}</span>
+                </div>
+              ))}
+              <div style={{ display:'flex',justifyContent:'space-between',padding:'10px 0',fontSize:13,fontWeight:700 }}>
+                <span>Total Penghasilan</span><span style={{ color:'#2E7D32' }}>{formatRp(p.totalPenghasilan)}</span>
+              </div>
+            </Card>
+            <Card style={{ padding:16 }}>
+              <p style={{ fontWeight:700,fontSize:13,margin:'0 0 12px',color:'#C62828' }}>🔻 Potongan</p>
+              {[['BPJS Kesehatan',emp.bpjs_kesehatan||0],['BPJS Ketenagakerjaan',emp.bpjs_ketenagakerjaan||0],['PPh 21',emp.pph21||0],['Pot. Keterlambatan',p.potTerlambat],['Pot. Alpha',p.potAlpha]].map(([k,v])=>(
+                <div key={k} style={{ display:'flex',justifyContent:'space-between',padding:'7px 0',borderBottom:'1px solid #f5f5f5',fontSize:13 }}>
+                  <span style={{ color:'#777' }}>{k}</span><span style={{ fontWeight:600,color:'#C62828' }}>{formatRp(v)}</span>
+                </div>
+              ))}
+              <div style={{ display:'flex',justifyContent:'space-between',padding:'10px 0',fontSize:13,fontWeight:700 }}>
+                <span>Total Potongan</span><span style={{ color:'#C62828' }}>{formatRp(p.totalPotongan)}</span>
+              </div>
+            </Card>
+          </>
+        )}
+
+        {tab==='Riwayat' && (
+          <Card style={{ padding:16 }}>
+            {records.length===0 ? <p style={{ textAlign:'center',color:'#aaa',padding:16,fontSize:13 }}>Tidak ada data absensi</p>
+            : records.map((a,i)=>(
+              <div key={i} style={{ padding:'10px 0',borderBottom:'1px solid #f5f5f5' }}>
+                <div style={{ display:'flex',justifyContent:'space-between',marginBottom:4 }}>
+                  <span style={{ fontSize:13,fontWeight:600 }}>{a.tanggal}</span>
+                  <Chip status={a.status_kehadiran}/>
+                </div>
+                <p style={{ fontSize:12,color:'#aaa',margin:0 }}>{a.jam_masuk||'-'} → {a.jam_keluar||'-'} · {a.durasi||'-'}</p>
+              </div>
+            ))}
+          </Card>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ─── EMPLOYEE NAV ─────────────────────────────────────────────────────────────
+const EmpNav = ({ active, onChange }) => (
+  <div style={{ position:'fixed',bottom:0,left:0,right:0,maxWidth:430,margin:'0 auto',background:'white',borderTop:'1px solid #f0f0f0',display:'flex',zIndex:40,boxShadow:'0 -4px 20px rgba(0,0,0,0.06)' }}>
+    {[{key:'home',icon:'🏠',label:'Beranda'},{key:'izin',icon:'📋',label:'Izin'},{key:'slip',icon:'💰',label:'Slip Gaji'}].map(item=>(
+      <button key={item.key} onClick={()=>onChange(item.key)} style={{ flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:2,padding:'10px 0',background:'none',border:'none',cursor:'pointer' }}>
+        <span style={{ fontSize:20 }}>{item.icon}</span>
+        <span style={{ fontSize:10,fontWeight:700,color:active===item.key?'#E53935':'#aaa' }}>{item.label}</span>
+        {active===item.key && <span style={{ width:18,height:2,borderRadius:2,background:'#E53935' }}/>}
+      </button>
+    ))}
+  </div>
+)
+
+// ─── HRD DASHBOARD ────────────────────────────────────────────────────────────
+const HRDDashboard = ({ user, showToast, onNavChange, dbData, refreshData }) => {
+  const [showNotif, setShowNotif] = useState(false)
+  const today = new Date().toISOString().split('T')[0]
+  const todayAtt = dbData.attendance.filter(a=>a.tanggal===today)
+  const hadirHariIni = todayAtt.filter(a=>['HADIR','WFH','TERLAMBAT'].includes(a.status_kehadiran)).length
+  const alphaHariIni = todayAtt.filter(a=>a.status_kehadiran==='ALPHA').length
+  const menungguIzin = dbData.izin.filter(c=>c.status==='MENUNGGU').length
+  const menungguValidasi = dbData.attendance.filter(a=>a.status_validasi==='MENUNGGU').length
+  const totalKaryawan = dbData.karyawan.length
+
+  return (
+    <div style={{ flex:1,overflowY:'auto',paddingBottom:80,background:'#F8F8F8' }}>
+      <div style={{ background:'linear-gradient(135deg,#E53935,#F5A623)',padding:'32px 16px 50px',position:'relative',overflow:'hidden' }}>
+        <div style={{ position:'absolute',top:-30,right:-30,width:120,height:120,borderRadius:'50%',background:'rgba(255,255,255,0.1)' }}/>
+        <div style={{ display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:16 }}>
+          <div style={{ display:'flex',alignItems:'center',gap:8 }}>
+            <WellJoyLogo size={36}/>
+            <span style={{ color:'white',fontWeight:800,fontSize:15 }}>WellJoy HRIS</span>
+          </div>
+          <NotifBell nip={user.nip} onOpen={()=>setShowNotif(true)} notifications={dbData.notifications}/>
+        </div>
+        <p style={{ color:'rgba(255,255,255,0.85)',fontSize:13,margin:'0 0 4px' }}>Dashboard HRD</p>
+        <h1 style={{ color:'white',fontWeight:800,fontSize:20,margin:'0 0 4px' }}>{user.nama}</h1>
+        <p style={{ color:'rgba(255,255,255,0.75)',fontSize:12,margin:0 }}>{new Date().toLocaleDateString('id-ID',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}</p>
+      </div>
+
+      <div style={{ padding:'0 16px',marginTop:-30,display:'flex',flexDirection:'column',gap:12 }}>
+        <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:10 }}>
+          {[
+            ['👥','Total Karyawan',totalKaryawan,'#E3F2FD','#1565C0'],
+            ['✅','Hadir Hari Ini',hadirHariIni,'#E8F5E9','#2E7D32'],
+            ['🔴','Alpha Hari Ini',alphaHariIni,'#FFEBEE','#C62828'],
+            ['📋','Izin Menunggu',menungguIzin,'#FFF8E1','#F57F17'],
+          ].map(([icon,lbl,val,bg,c])=>(
+            <Card key={lbl} style={{ padding:16,background:bg,boxShadow:'none',border:'none' }}>
+              <span style={{ fontSize:24 }}>{icon}</span>
+              <p style={{ fontSize:24,fontWeight:800,color:c,margin:'8px 0 2px' }}>{val}</p>
+              <p style={{ fontSize:12,color:'#888',margin:0 }}>{lbl}</p>
+            </Card>
+          ))}
+        </div>
+
+        {menungguIzin>0 && (
+          <button onClick={()=>onNavChange('approval')} style={{ display:'flex',alignItems:'center',gap:12,padding:16,background:'#FFF8E1',borderRadius:16,border:'2px solid #FFE082',cursor:'pointer',width:'100%',textAlign:'left' }}>
+            <span style={{ fontSize:28 }}>📋</span>
+            <div style={{ flex:1 }}>
+              <p style={{ fontWeight:700,fontSize:14,color:'#F57F17',margin:0 }}>{menungguIzin} Izin Menunggu Approval</p>
+              <p style={{ fontSize:12,color:'#aaa',margin:0 }}>Tap untuk review</p>
+            </div>
+            <span style={{ color:'#F5A623',fontSize:18 }}>›</span>
+          </button>
+        )}
+
+        {menungguValidasi>0 && (
+          <button onClick={()=>onNavChange('absensi')} style={{ display:'flex',alignItems:'center',gap:12,padding:16,background:'#E3F2FD',borderRadius:16,border:'2px solid #90CAF9',cursor:'pointer',width:'100%',textAlign:'left' }}>
+            <span style={{ fontSize:28 }}>🕒</span>
+            <div style={{ flex:1 }}>
+              <p style={{ fontWeight:700,fontSize:14,color:'#1565C0',margin:0 }}>{menungguValidasi} Absensi Perlu Validasi</p>
+              <p style={{ fontSize:12,color:'#aaa',margin:0 }}>Tap untuk validasi</p>
+            </div>
+            <span style={{ color:'#1565C0',fontSize:18 }}>›</span>
+          </button>
+        )}
+
+        <Card style={{ padding:16 }}>
+          <p style={{ fontWeight:800,fontSize:14,margin:'0 0 12px' }}>Absensi Hari Ini</p>
+          {todayAtt.length===0 ? <p style={{ textAlign:'center',color:'#aaa',fontSize:13,padding:12 }}>Belum ada absensi hari ini</p>
+          : todayAtt.slice(0,5).map((a,i)=>(
+            <div key={i} style={{ display:'flex',alignItems:'center',gap:12,padding:'10px 0',borderBottom:i<Math.min(todayAtt.length,5)-1?'1px solid #f5f5f5':'none' }}>
+              <div style={{ width:36,height:36,borderRadius:'50%',background:'linear-gradient(135deg,#E53935,#F5A623)',display:'flex',alignItems:'center',justifyContent:'center',color:'white',fontWeight:700,fontSize:14,flexShrink:0 }}>{a.nama?.[0]}</div>
+              <div style={{ flex:1 }}><p style={{ fontSize:13,fontWeight:600,margin:0 }}>{a.nama}</p><p style={{ fontSize:11,color:'#aaa',margin:0 }}>{a.jam_masuk||'-'} → {a.jam_keluar||'-'}</p></div>
+              <Chip status={a.status_kehadiran}/>
+            </div>
+          ))}
+        </Card>
+      </div>
+
+      {showNotif && <NotifPanel nip={user.nip} onClose={()=>setShowNotif(false)} notifications={dbData.notifications} onMarkRead={async(id)=>{ await supabase.from('notifications').update({is_read:true}).eq('id',id); refreshData() }}/>}
+    </div>
+  )
+}
+
+// ─── HRD KARYAWAN ─────────────────────────────────────────────────────────────
+const HRDKaryawan = ({ user, showToast, dbData, refreshData }) => {
+  const [search, setSearch] = useState('')
+  const [filterDiv, setFilterDiv] = useState('Semua')
+  const [selectedNIP, setSelectedNIP] = useState(null)
+  const [detailTab, setDetailTab] = useState('Info')
+  const [editMode, setEditMode] = useState(false)
+  const [editForm, setEditForm] = useState({})
+  const [confirmDel, setConfirmDel] = useState(false)
+  const [showAdd, setShowAdd] = useState(false)
+  const [addForm, setAddForm] = useState({ NIP:'',Nama:'',Jabatan:'',Divisi:'',Email:'',NoHP:'' })
+  const [attBulan, setAttBulan] = useState(new Date().getMonth())
+  const [attTahun, setAttTahun] = useState(new Date().getFullYear())
+  const [loadingSave, setLoadingSave] = useState(false)
+
+  const divisiList = ['Semua', ...new Set(dbData.karyawan.map(k=>k.divisi).filter(Boolean))]
+  const filtered = dbData.karyawan.filter(k=>{
+    const matchSearch = k.nama?.toLowerCase().includes(search.toLowerCase()) || k.nip?.includes(search)
+    const matchDiv = filterDiv==='Semua' || k.divisi===filterDiv
+    return matchSearch && matchDiv
+  })
+
+  const emp = selectedNIP ? dbData.karyawan.find(k=>k.nip===selectedNIP) : null
+  const empAtt = emp ? dbData.attendance.filter(a=>{
+    const d = new Date(a.tanggal)
+    return a.nip===emp.nip && d.getMonth()===attBulan && d.getFullYear()===attTahun
+  }) : []
+  const empPayroll = emp ? calcPayroll(emp, empAtt) : null
+  const empIzin = emp ? dbData.izin.filter(c=>c.nip===emp.nip) : []
+
+  const saveEdit = async () => {
+    setLoadingSave(true)
+    const { error } = await supabase.from('master_karyawan').update({
+      nama: editForm.nama, email: editForm.email, no_hp: editForm.no_hp,
+      jabatan: editForm.jabatan, divisi: editForm.divisi, status: editForm.status,
+      sisa_izin: Number(editForm.sisa_izin)||0,
+      gaji_pokok: Number(editForm.gaji_pokok)||0,
+      tunjangan_jabatan: Number(editForm.tunjangan_jabatan)||0,
+      tunjangan_transport: Number(editForm.tunjangan_transport)||0,
+      tunjangan_makan: Number(editForm.tunjangan_makan)||0,
+      bpjs_kesehatan: Number(editForm.bpjs_kesehatan)||0,
+      bpjs_ketenagakerjaan: Number(editForm.bpjs_ketenagakerjaan)||0,
+      pph21: Number(editForm.pph21)||0,
+      nik: editForm.nik, alamat: editForm.alamat, atasan: editForm.atasan,
+    }).eq('nip', selectedNIP)
+    if (!error) {
+      await supabase.from('audit_log').insert({ user_name:user.nama, nip:user.nip, aktivitas:`Edit data karyawan ${emp?.nama}`, keterangan:'' })
+      showToast('✅ Data disimpan!')
+      setEditMode(false)
+      refreshData()
+    } else { showToast('❌ Gagal menyimpan') }
+    setLoadingSave(false)
+  }
+
+  const deleteKaryawan = async () => {
+    const { error } = await supabase.from('master_karyawan').delete().eq('nip', selectedNIP)
+    if (!error) {
+      await supabase.from('users').delete().eq('nip', selectedNIP)
+      await supabase.from('audit_log').insert({ user_name:user.nama, nip:user.nip, aktivitas:`Hapus karyawan ${emp?.nama}`, keterangan:'' })
+      showToast('✅ Karyawan dihapus!')
+      setSelectedNIP(null); setConfirmDel(false)
+      refreshData()
+    } else { showToast('❌ Gagal menghapus') }
+  }
+
+  const handleAdd = async () => {
+    if(!addForm.NIP||!addForm.Nama){ showToast('NIP dan Nama wajib diisi'); return }
+    const { error: e1 } = await supabase.from('users').insert({ nip:addForm.NIP, nama:addForm.Nama, email:addForm.Email, no_hp:addForm.NoHP, password:'password123', role:'EMPLOYEE', status:'aktif' })
+    if (e1) { showToast('❌ NIP sudah terdaftar'); return }
+    await supabase.from('master_karyawan').insert({
+      nip:addForm.NIP, nama:addForm.Nama, jabatan:addForm.Jabatan, divisi:addForm.Divisi,
+      email:addForm.Email, no_hp:addForm.NoHP, status:'aktif', sisa_izin:12,
+      gaji_pokok:5000000, tunjangan_jabatan:1000000, tunjangan_transport:500000,
+      tunjangan_makan:750000, bpjs_kesehatan:150000, bpjs_ketenagakerjaan:200000,
+      pph21:1050000, tanggal_masuk:new Date().toISOString().split('T')[0],
+      atasan:user.nama, lembur_per_jam:45000, potongan_terlambat_per_menit:5000
+    })
+    await supabase.from('audit_log').insert({ user_name:user.nama, nip:user.nip, aktivitas:`Tambah karyawan ${addForm.Nama}`, keterangan:'' })
+    showToast('✅ Karyawan ditambahkan!')
+    setShowAdd(false); setAddForm({ NIP:'',Nama:'',Jabatan:'',Divisi:'',Email:'',NoHP:'' })
+    refreshData()
+  }
+
+  const efv = (k, label) => (
+    <input value={editForm[k]??''} onChange={e=>setEditForm({...editForm,[k]:e.target.value})} placeholder={label}
+      style={{ flex:1,border:'1px solid #F5A623',borderRadius:8,padding:'4px 8px',fontSize:13,outline:'none',textAlign:'right' }}/>
+  )
+
+  return (
+    <div style={{ flex:1,overflowY:'auto',paddingBottom:80,background:'#F8F8F8' }}>
+      <div style={{ display:'flex',alignItems:'center',justifyContent:'space-between',padding:'24px 16px 12px' }}>
+        <div><h1 style={{ fontWeight:800,fontSize:18,margin:0 }}>Karyawan</h1><p style={{ fontSize:11,color:'#aaa',margin:0 }}>Manajemen data karyawan</p></div>
+        <button onClick={()=>setShowAdd(true)} style={{ background:'linear-gradient(135deg,#E53935,#F5A623)',color:'white',border:'none',borderRadius:10,padding:'8px 14px',fontWeight:700,fontSize:13,cursor:'pointer' }}>+ Tambah</button>
+      </div>
+      <div style={{ padding:'0 16px',display:'flex',flexDirection:'column',gap:10 }}>
+        <div style={{ display:'flex',alignItems:'center',background:'white',border:'1px solid #e0e0e0',borderRadius:14,padding:'10px 14px',gap:8 }}>
+          <span style={{ color:'#aaa',fontSize:14 }}>🔍</span>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Cari nama atau NIP..." style={{ flex:1,outline:'none',fontSize:13,border:'none',background:'transparent' }}/>
+        </div>
+        <div style={{ display:'flex',gap:8,overflowX:'auto',paddingBottom:4 }}>
+          {divisiList.map(d=>(
+            <button key={d} onClick={()=>setFilterDiv(d)} style={{ padding:'6px 14px',borderRadius:99,fontSize:12,fontWeight:700,border:'none',cursor:'pointer',whiteSpace:'nowrap',background:filterDiv===d?'linear-gradient(135deg,#E53935,#F5A623)':'white',color:filterDiv===d?'white':'#888' }}>{d}</button>
+          ))}
+        </div>
+        {filtered.map(k=>(
+          <Card key={k.nip} style={{ padding:16,display:'flex',alignItems:'center',gap:12,cursor:'pointer' }} onClick={()=>{ setSelectedNIP(k.nip); setDetailTab('Info'); setEditMode(false); setConfirmDel(false) }}>
+            <div style={{ width:48,height:48,borderRadius:'50%',background:'linear-gradient(135deg,#E53935,#F5A623)',display:'flex',alignItems:'center',justifyContent:'center',color:'white',fontWeight:700,fontSize:18,flexShrink:0 }}>{k.nama?.[0]}</div>
+            <div style={{ flex:1 }}>
+              <p style={{ fontWeight:800,fontSize:14,margin:0 }}>{k.nama}</p>
+              <p style={{ fontSize:11,color:'#aaa',margin:0 }}>{k.nip} · {k.jabatan}</p>
+              <p style={{ fontSize:11,color:'#aaa',margin:0 }}>{k.divisi}</p>
+            </div>
+            <Chip status={k.status}/>
+          </Card>
+        ))}
+        {filtered.length===0 && <p style={{ textAlign:'center',color:'#aaa',padding:32,fontSize:13 }}>Tidak ada karyawan ditemukan</p>}
+      </div>
+
+      {emp && !confirmDel && (
+        <Modal title="Detail Karyawan" onClose={()=>{ setSelectedNIP(null); setEditMode(false) }} wide>
+          <div style={{ display:'flex',alignItems:'center',gap:16,marginBottom:16,padding:16,borderRadius:16,background:'linear-gradient(135deg,#FFF5F5,#FFF8E1)' }}>
+            <div style={{ width:60,height:60,borderRadius:'50%',background:'linear-gradient(135deg,#E53935,#F5A623)',display:'flex',alignItems:'center',justifyContent:'center',color:'white',fontWeight:800,fontSize:24,flexShrink:0 }}>{emp.nama?.[0]}</div>
+            <div style={{ flex:1 }}>
+              <p style={{ fontWeight:800,fontSize:16,margin:'0 0 2px' }}>{emp.nama}</p>
+              <p style={{ fontSize:12,color:'#888',margin:'0 0 6px' }}>{emp.nip} · {emp.jabatan}</p>
+              <div style={{ display:'flex',gap:6,flexWrap:'wrap' }}><Chip status={emp.status}/><span style={{ fontSize:11,padding:'3px 10px',borderRadius:99,background:'#E3F2FD',color:'#1565C0',fontWeight:700 }}>{emp.divisi}</span></div>
+            </div>
+            {!editMode && (
+              <div style={{ display:'flex',flexDirection:'column',gap:6 }}>
+                <button onClick={()=>{ setEditForm({...emp}); setEditMode(true) }} style={{ background:'#FFF8E1',border:'none',borderRadius:8,padding:'6px 12px',fontSize:12,fontWeight:700,color:'#F57F17',cursor:'pointer' }}>✏️ Edit</button>
+                <button onClick={()=>setConfirmDel(true)} style={{ background:'#FFF5F5',border:'none',borderRadius:8,padding:'6px 12px',fontSize:12,fontWeight:700,color:'#E53935',cursor:'pointer' }}>🗑️ Hapus</button>
+              </div>
+            )}
+          </div>
+
+          <div style={{ display:'flex',gap:8,marginBottom:12 }}>
+            <select value={attBulan} onChange={e=>setAttBulan(Number(e.target.value))} style={{ flex:1,border:'1px solid #e0e0e0',borderRadius:10,padding:'8px 10px',fontSize:13,outline:'none' }}>
+              {BNAME.map((b,i)=><option key={i} value={i}>{b}</option>)}
+            </select>
+            <select value={attTahun} onChange={e=>setAttTahun(Number(e.target.value))} style={{ width:80,border:'1px solid #e0e0e0',borderRadius:10,padding:'8px 10px',fontSize:13,outline:'none' }}>
+              {[2024,2025,2026].map(y=><option key={y}>{y}</option>)}
+            </select>
+          </div>
+
+          <div style={{ display:'flex',borderBottom:'1px solid #f0f0f0',marginBottom:12,overflowX:'auto' }}>
+            {['Info','Absensi','Riwayat Izin','Payroll'].map(t=>(
+              <button key={t} onClick={()=>{ setDetailTab(t); setEditMode(false) }} style={{ padding:'10px 14px',fontSize:12,fontWeight:700,border:'none',borderBottom:detailTab===t?'2px solid #E53935':'2px solid transparent',color:detailTab===t?'#E53935':'#aaa',background:'transparent',cursor:'pointer',whiteSpace:'nowrap' }}>{t}</button>
+            ))}
+          </div>
+
+          {detailTab==='Info' && (
+            <div>
+              {editMode && <div style={{ background:'#FFF8E1',padding:'10px 14px',borderRadius:10,fontSize:12,color:'#F57F17',fontWeight:600,marginBottom:12 }}>Mode Edit — ubah nilai di bawah lalu simpan</div>}
+              {[['NIP','nip'],['Nama','nama'],['NIK','nik'],['Email','email'],['No. HP','no_hp'],['Alamat','alamat'],['Divisi','divisi'],['Jabatan','jabatan'],['Tanggal Masuk','tanggal_masuk'],['Atasan','atasan'],['Sisa Izin (hari)','sisa_izin'],['Status','status']].map(([lbl,k])=>(
+                <div key={k} style={{ display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 0',borderBottom:'1px solid #f5f5f5',fontSize:13 }}>
+                  <span style={{ color:'#aaa',flexShrink:0,width:130 }}>{lbl}</span>
+                  {editMode && k!=='nip' ? efv(k,lbl) : <span style={{ fontWeight:600,color:'#333',textAlign:'right',flex:1,marginLeft:8 }}>{emp[k]||'-'}</span>}
+                </div>
+              ))}
+              <div style={{ marginTop:16,padding:14,borderRadius:14,background:'#F9F9F9' }}>
+                <p style={{ fontSize:11,fontWeight:700,color:'#aaa',margin:'0 0 10px' }}>INFO GAJI</p>
+                {[['Gaji Pokok','gaji_pokok'],['Tunjangan Jabatan','tunjangan_jabatan'],['Tunjangan Transport','tunjangan_transport'],['Tunjangan Makan','tunjangan_makan'],['BPJS Kesehatan','bpjs_kesehatan'],['BPJS Ketenagakerjaan','bpjs_ketenagakerjaan'],['PPh 21','pph21']].map(([lbl,k])=>(
+                  <div key={k} style={{ display:'flex',justifyContent:'space-between',padding:'5px 0',borderBottom:'1px solid #f0f0f0',fontSize:12 }}>
+                    <span style={{ color:'#777' }}>{lbl}</span>
+                    {editMode ? efv(k,lbl) : <span style={{ fontWeight:600,color:'#333' }}>{formatRp(emp[k]||0)}</span>}
+                  </div>
+                ))}
+              </div>
+              {editMode && (
+                <div style={{ marginTop:16,display:'flex',gap:8 }}>
+                  <BtnGrad small color="green" onClick={saveEdit} disabled={loadingSave}>{loadingSave?'Menyimpan...':'💾 Simpan'}</BtnGrad>
+                  <BtnGrad small outline onClick={()=>setEditMode(false)}>Batal</BtnGrad>
+                </div>
+              )}
+            </div>
+          )}
+
+          {detailTab==='Absensi' && (
+            <div>
+              {empPayroll && (
+                <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8,marginBottom:12 }}>
+                  {[['Hadir',empPayroll.hadir,'#E8F5E9','#2E7D32'],['Terlambat',empPayroll.terlambat,'#FFF8E1','#F57F17'],['Alpha',empPayroll.alpha,'#FFEBEE','#C62828']].map(([l,v,bg,c])=>(
+                    <div key={l} style={{ borderRadius:10,padding:10,textAlign:'center',background:bg }}>
+                      <p style={{ fontSize:16,fontWeight:800,color:c,margin:0 }}>{v}</p>
+                      <p style={{ fontSize:11,color:c,margin:0 }}>{l}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {empAtt.length===0 ? <p style={{ textAlign:'center',color:'#aaa',padding:24,fontSize:13 }}>Tidak ada data absensi untuk periode ini</p>
+              : empAtt.map((a,i)=>(
+                <div key={i} style={{ border:'1px solid #f0f0f0',borderRadius:14,padding:12,marginBottom:8 }}>
+                  <div style={{ display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8 }}>
+                    <span style={{ fontWeight:700,fontSize:13 }}>{a.tanggal}</span>
+                    <Chip status={a.status_kehadiran}/>
+                  </div>
+                  {a.jam_masuk && (
+                    <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8,marginBottom:8 }}>
+                      {[['Masuk',a.jam_masuk,'#E8F5E9','#2E7D32'],['Pulang',a.jam_keluar||'-','#FFF5F5','#C62828'],['Durasi',a.durasi||'-','#F5F5F5','#555']].map(([l,v,bg,c])=>(
+                        <div key={l} style={{ background:bg,borderRadius:8,padding:8,textAlign:'center' }}>
+                          <p style={{ fontSize:10,color:'#aaa',margin:0 }}>{l}</p>
+                          <p style={{ fontWeight:700,fontSize:12,color:c,margin:0 }}>{v}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {detailTab==='Riwayat Izin' && (
+            <div>
+              {empIzin.length===0 ? <p style={{ textAlign:'center',color:'#aaa',padding:24,fontSize:13 }}>Tidak ada riwayat izin</p>
+              : empIzin.map((c,i)=>(
+                <div key={i} style={{ border:'1px solid #f0f0f0',borderRadius:14,padding:12,marginBottom:8 }}>
+                  <div style={{ display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6 }}>
+                    <span style={{ fontWeight:700,fontSize:13 }}>{c.jenis_izin}</span>
+                    <Chip status={c.status}/>
+                  </div>
+                  <p style={{ fontSize:12,color:'#888',margin:0 }}>{c.tanggal_mulai} – {c.tanggal_selesai} · {c.jumlah_hari} hari</p>
+                  <p style={{ fontSize:12,color:'#aaa',margin:'4px 0 0' }}>{c.keterangan}</p>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {detailTab==='Payroll' && empPayroll && (
+            <div>
+              <div style={{ borderRadius:14,padding:16,background:'linear-gradient(135deg,#FFF8E1,#FFF3CD)',marginBottom:14 }}>
+                <p style={{ fontSize:11,color:'#888',margin:0 }}>Take Home Pay · {BNAME[attBulan]} {attTahun}</p>
+                <p style={{ fontSize:24,fontWeight:800,color:'#E53935',margin:'4px 0 2px' }}>{formatRp(empPayroll.takeHomePay)}</p>
+              </div>
+              {[['Gaji Pokok',emp.gaji_pokok||0],['Tunjangan Jabatan',emp.tunjangan_jabatan||0],['Tunjangan Transport',emp.tunjangan_transport||0],['Tunjangan Makan',emp.tunjangan_makan||0],['Bonus Lembur',empPayroll.bonusLembur]].map(([k,v])=>(
+                <div key={k} style={{ display:'flex',justifyContent:'space-between',padding:'6px 0',borderBottom:'1px solid #f5f5f5',fontSize:13 }}>
+                  <span style={{ color:'#777' }}>{k}</span><span style={{ fontWeight:600,color:'#2E7D32' }}>{formatRp(v)}</span>
+                </div>
+              ))}
+              <div style={{ display:'flex',justifyContent:'space-between',padding:'10px 0',fontSize:13,fontWeight:700,borderBottom:'2px solid #e0e0e0',marginBottom:10 }}>
+                <span>Total Penghasilan</span><span style={{ color:'#2E7D32' }}>{formatRp(empPayroll.totalPenghasilan)}</span>
+              </div>
+              {[['BPJS Kesehatan',emp.bpjs_kesehatan||0],['BPJS Ketenagakerjaan',emp.bpjs_ketenagakerjaan||0],['PPh 21',emp.pph21||0],['Pot. Terlambat',empPayroll.potTerlambat],['Pot. Alpha',empPayroll.potAlpha]].map(([k,v])=>(
+                <div key={k} style={{ display:'flex',justifyContent:'space-between',padding:'6px 0',borderBottom:'1px solid #f5f5f5',fontSize:13 }}>
+                  <span style={{ color:'#777' }}>{k}</span><span style={{ fontWeight:600,color:'#C62828' }}>{formatRp(v)}</span>
+                </div>
+              ))}
+              <div style={{ display:'flex',justifyContent:'space-between',padding:'10px 0 0',fontSize:13,fontWeight:700 }}>
+                <span>Total Potongan</span><span style={{ color:'#C62828' }}>{formatRp(empPayroll.totalPotongan)}</span>
+              </div>
+            </div>
+          )}
+        </Modal>
+      )}
+
+      {confirmDel && emp && (
+        <Modal title="Hapus Karyawan" onClose={()=>setConfirmDel(false)}>
+          <p style={{ textAlign:'center',fontSize:14,color:'#555',marginBottom:24 }}>Hapus <strong>{emp.nama}</strong>? Tindakan ini tidak dapat dibatalkan.</p>
+          <div style={{ display:'flex',gap:8 }}>
+            <BtnGrad small outline onClick={()=>setConfirmDel(false)}>Batal</BtnGrad>
+            <BtnGrad small color="red" onClick={deleteKaryawan}>Hapus</BtnGrad>
+          </div>
+        </Modal>
+      )}
+
+      {showAdd && (
+        <Modal title="Tambah Karyawan" onClose={()=>setShowAdd(false)}>
+          {[['NIP','NIP'],['Nama','Nama'],['Jabatan','Jabatan'],['Divisi','Divisi'],['Email','Email'],['NoHP','No. HP']].map(([k,lbl])=>(
+            <div key={k} style={{ marginBottom:10 }}>
+              <label style={{ fontSize:12,fontWeight:700,color:'#666',display:'block',marginBottom:4 }}>{lbl}</label>
+              <input value={addForm[k]} onChange={e=>setAddForm({...addForm,[k]:e.target.value})} placeholder={lbl} style={{ width:'100%',border:'1px solid #e0e0e0',borderRadius:12,padding:'10px 12px',fontSize:13,outline:'none',boxSizing:'border-box' }}/>
+            </div>
+          ))}
+          <p style={{ fontSize:11,color:'#aaa',margin:'0 0 12px' }}>Password default: <strong>password123</strong></p>
+          <BtnGrad onClick={handleAdd}>Tambah Karyawan</BtnGrad>
+        </Modal>
+      )}
+    </div>
+  )
+}
+
+// ─── HRD ABSENSI ──────────────────────────────────────────────────────────────
+const HRDAbsensi = ({ user, showToast, dbData, refreshData }) => {
+  const [bulan, setBulan] = useState(new Date().getMonth())
+  const [tahun, setTahun] = useState(new Date().getFullYear())
+  const [search, setSearch] = useState('')
+  const [filterStatus, setFilterStatus] = useState('Semua')
+  const [selectedAtt, setSelectedAtt] = useState(null)
+  const [catatan, setCatatan] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  const statusList = ['Semua','MENUNGGU','VALID','HADIR','TERLAMBAT','WFH','ALPHA']
+  const filtered = dbData.attendance.filter(a=>{
+    const d = new Date(a.tanggal)
+    const matchBulan = d.getMonth()===bulan && d.getFullYear()===tahun
+    const matchSearch = a.nama?.toLowerCase().includes(search.toLowerCase()) || a.nip?.includes(search)
+    const matchStatus = filterStatus==='Semua' || a.status_kehadiran===filterStatus || a.status_validasi===filterStatus
+    return matchBulan && matchSearch && matchStatus
+  }).sort((a,b)=>b.tanggal.localeCompare(a.tanggal))
+
+  const validasi = async (action) => {
+    if (!selectedAtt) return
+    setLoading(true)
+    const { error } = await supabase.from('attendance').update({
+      status_validasi: action==='valid'?'VALID':'DITOLAK',
+      validasi_oleh: user.nama,
+      catatan_validasi: catatan
+    }).eq('id', selectedAtt.id)
+    if (!error) {
+      await supabase.from('audit_log').insert({ user_name:user.nama, nip:user.nip, aktivitas:`Validasi absensi ${selectedAtt.nama} ${selectedAtt.tanggal}`, keterangan:`Status: ${action==='valid'?'VALID':'DITOLAK'}` })
+      showToast(`✅ Absensi ${action==='valid'?'divalidasi':'ditolak'}!`)
+      setSelectedAtt(null); setCatatan('')
+      refreshData()
+    } else { showToast('❌ Gagal validasi') }
+    setLoading(false)
+  }
+
+  return (
+    <div style={{ flex:1,overflowY:'auto',paddingBottom:80,background:'#F8F8F8' }}>
+      <div style={{ padding:'24px 16px 12px' }}>
+        <h1 style={{ fontWeight:800,fontSize:18,margin:0 }}>Absensi</h1>
+        <p style={{ fontSize:11,color:'#aaa',margin:0 }}>Monitor & validasi kehadiran</p>
+      </div>
+      <div style={{ padding:'0 16px',display:'flex',flexDirection:'column',gap:10 }}>
+        <div style={{ display:'flex',gap:8 }}>
+          <select value={bulan} onChange={e=>setBulan(Number(e.target.value))} style={{ flex:1,border:'1px solid #e0e0e0',borderRadius:12,padding:'10px 12px',fontSize:13,outline:'none',background:'white' }}>
+            {BNAME.map((b,i)=><option key={i} value={i}>{b}</option>)}
+          </select>
+          <select value={tahun} onChange={e=>setTahun(Number(e.target.value))} style={{ width:80,border:'1px solid #e0e0e0',borderRadius:12,padding:'10px 12px',fontSize:13,outline:'none',background:'white' }}>
+            {[2024,2025,2026].map(y=><option key={y}>{y}</option>)}
+          </select>
+        </div>
+        <div style={{ display:'flex',alignItems:'center',background:'white',border:'1px solid #e0e0e0',borderRadius:14,padding:'10px 14px',gap:8 }}>
+          <span style={{ color:'#aaa' }}>🔍</span>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Cari nama atau NIP..." style={{ flex:1,outline:'none',fontSize:13,border:'none',background:'transparent' }}/>
+        </div>
+        <div style={{ display:'flex',gap:8,overflowX:'auto',paddingBottom:4 }}>
+          {statusList.map(s=>(
+            <button key={s} onClick={()=>setFilterStatus(s)} style={{ padding:'6px 12px',borderRadius:99,fontSize:11,fontWeight:700,border:'none',cursor:'pointer',whiteSpace:'nowrap',background:filterStatus===s?'linear-gradient(135deg,#E53935,#F5A623)':'white',color:filterStatus===s?'white':'#888' }}>{s}</button>
+          ))}
+        </div>
+        {filtered.length===0 ? <p style={{ textAlign:'center',color:'#aaa',padding:24,fontSize:13 }}>Tidak ada data absensi</p>
+        : filtered.map(a=>(
+          <Card key={a.id} style={{ padding:16,cursor:'pointer' }} onClick={()=>{ setSelectedAtt(a); setCatatan(a.catatan_validasi||'') }}>
+            <div style={{ display:'flex',alignItems:'center',gap:12,marginBottom:8 }}>
+              <div style={{ width:40,height:40,borderRadius:'50%',background:'linear-gradient(135deg,#E53935,#F5A623)',display:'flex',alignItems:'center',justifyContent:'center',color:'white',fontWeight:700,fontSize:15,flexShrink:0 }}>{a.nama?.[0]}</div>
+              <div style={{ flex:1 }}>
+                <p style={{ fontWeight:700,fontSize:13,margin:0 }}>{a.nama}</p>
+                <p style={{ fontSize:11,color:'#aaa',margin:0 }}>{a.tanggal} · {a.jam_masuk||'-'} → {a.jam_keluar||'-'}</p>
+              </div>
+              <div style={{ display:'flex',flexDirection:'column',alignItems:'flex-end',gap:4 }}>
+                <Chip status={a.status_kehadiran}/>
+                <Chip status={a.status_validasi}/>
+              </div>
+            </div>
+            {a.menit_terlambat>0 && <p style={{ fontSize:12,color:'#F57F17',fontWeight:600,margin:0 }}>⚠️ Terlambat {a.menit_terlambat} menit</p>}
+          </Card>
+        ))}
+      </div>
+
+      {selectedAtt && (
+        <Modal title="Detail Absensi" onClose={()=>{ setSelectedAtt(null); setCatatan('') }} wide>
+          {[['Nama',selectedAtt.nama],['NIP',selectedAtt.nip],['Tanggal',selectedAtt.tanggal],['Jam Masuk',selectedAtt.jam_masuk||'-'],['Jam Keluar',selectedAtt.jam_keluar||'-'],['Durasi',selectedAtt.durasi||'-'],['Status',selectedAtt.status_kehadiran],['Terlambat',selectedAtt.menit_terlambat?`${selectedAtt.menit_terlambat} menit`:'0'],['Lembur',selectedAtt.jam_lembur?`${selectedAtt.jam_lembur} jam`:'0'],['Validasi',selectedAtt.status_validasi]].map(([k,v])=>(
+            <div key={k} style={{ display:'flex',justifyContent:'space-between',padding:'8px 0',borderBottom:'1px solid #f5f5f5',fontSize:13 }}>
+              <span style={{ color:'#aaa' }}>{k}</span><span style={{ fontWeight:600,color:'#333' }}>{v}</span>
+            </div>
+          ))}
+          {(selectedAtt.foto_masuk||selectedAtt.foto_keluar) && (
+            <div style={{ display:'flex',gap:10,marginTop:12 }}>
+              {selectedAtt.foto_masuk && <div style={{ flex:1 }}><p style={{ fontSize:11,color:'#aaa',margin:'0 0 4px' }}>Foto Masuk</p><img src={selectedAtt.foto_masuk} alt="" style={{ width:'100%',borderRadius:10,maxHeight:120,objectFit:'cover' }}/></div>}
+              {selectedAtt.foto_keluar && <div style={{ flex:1 }}><p style={{ fontSize:11,color:'#aaa',margin:'0 0 4px' }}>Foto Keluar</p><img src={selectedAtt.foto_keluar} alt="" style={{ width:'100%',borderRadius:10,maxHeight:120,objectFit:'cover' }}/></div>}
+            </div>
+          )}
+          {selectedAtt.status_validasi==='MENUNGGU' && (
+            <div style={{ marginTop:16 }}>
+              <label style={{ fontSize:12,fontWeight:700,color:'#666',display:'block',marginBottom:6 }}>Catatan Validasi</label>
+              <textarea value={catatan} onChange={e=>setCatatan(e.target.value)} rows={2} placeholder="Opsional..." style={{ width:'100%',border:'1px solid #e0e0e0',borderRadius:12,padding:'10px 12px',fontSize:13,outline:'none',resize:'none',boxSizing:'border-box',marginBottom:10 }}/>
+              <div style={{ display:'flex',gap:8 }}>
+                <BtnGrad small outline color="red" onClick={()=>validasi('tolak')} disabled={loading}>Tolak</BtnGrad>
+                <BtnGrad small color="green" onClick={()=>validasi('valid')} disabled={loading}>{loading?'Memproses...':'✅ Valid'}</BtnGrad>
+              </div>
+            </div>
+          )}
+        </Modal>
+      )}
+    </div>
+  )
+}
+
+// ─── HRD APPROVAL ─────────────────────────────────────────────────────────────
+const HRDApproval = ({ user, showToast, dbData, refreshData }) => {
+  const [tab, setTab] = useState('Semua')
+  const [selectedItem, setSelectedItem] = useState(null)
+  const [note, setNote] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  const tabMap = { Semua:null, Menunggu:'MENUNGGU', Disetujui:'DISETUJUI', Ditolak:'DITOLAK' }
+  const data = tab==='Semua' ? dbData.izin : dbData.izin.filter(c=>c.status===tabMap[tab])
+
+  const handleApproval = async (action) => {
+    if (!selectedItem) return
+    setLoading(true)
+    const newStatus = action==='approve' ? 'DISETUJUI' : 'DITOLAK'
+    const { error } = await supabase.from('izin').update({
+      status: newStatus, approved_by: user.nama,
+      approval_note: note || (action==='approve'?'Disetujui':'Ditolak')
+    }).eq('id', selectedItem.id)
+    if (!error) {
+      if (action==='approve') {
+        await supabase.from('master_karyawan')
+          .update({ sisa_izin: Math.max(0, (dbData.karyawan.find(k=>k.nip===selectedItem.nip)?.sisa_izin??0) - selectedItem.jumlah_hari) })
+          .eq('nip', selectedItem.nip)
+      }
+      await supabase.from('audit_log').insert({ user_name:user.nama, nip:user.nip, aktivitas:`${action==='approve'?'Setujui':'Tolak'} izin ${selectedItem.nama}`, keterangan:`${selectedItem.jenis_izin} ${selectedItem.jumlah_hari} hari` })
+      await supabase.from('notifications').insert({ nip:selectedItem.nip, type:'IZIN', message:`Pengajuan izin Anda ${action==='approve'?'disetujui':'ditolak'} oleh HRD` })
+      showToast(`✅ Izin ${action==='approve'?'disetujui':'ditolak'}!`)
+      setSelectedItem(null); setNote('')
+      refreshData()
+    } else { showToast('❌ Gagal memproses') }
+    setLoading(false)
+  }
+
+  return (
+    <div style={{ flex:1,overflowY:'auto',paddingBottom:80,background:'#F8F8F8' }}>
+      <div style={{ padding:'24px 16px 0' }}>
+        <h1 style={{ fontWeight:800,fontSize:18,margin:0 }}>Approval Izin</h1>
+        <p style={{ fontSize:11,color:'#aaa',margin:0 }}>Kelola pengajuan izin karyawan</p>
+      </div>
+      <div style={{ display:'flex',borderBottom:'1px solid #e0e0e0',background:'white',marginBottom:0 }}>
+        {['Semua','Menunggu','Disetujui','Ditolak'].map(t=>(
+          <button key={t} onClick={()=>{ setTab(t); setSelectedItem(null) }} style={{ flex:1,padding:'12px 0',fontSize:12,fontWeight:700,border:'none',borderBottom:tab===t?'2px solid #E53935':'2px solid transparent',color:tab===t?'#E53935':'#aaa',background:'transparent',cursor:'pointer' }}>{t}</button>
+        ))}
+      </div>
+      <div style={{ padding:'12px 16px',display:'flex',flexDirection:'column',gap:10 }}>
+        {data.length===0 ? <p style={{ textAlign:'center',color:'#aaa',padding:24,fontSize:13 }}>Tidak ada data</p>
+        : data.map(c=>(
+          <Card key={c.id} style={{ padding:16,cursor:'pointer' }} onClick={()=>{ setSelectedItem({...c}); setNote('') }}>
+            <div style={{ display:'flex',alignItems:'center',gap:12 }}>
+              {c.selfie_url ? <img src={c.selfie_url} alt="" style={{ width:48,height:48,borderRadius:'50%',objectFit:'cover',flexShrink:0,border:'2px solid #F5A623' }}/> : <div style={{ width:48,height:48,borderRadius:'50%',background:'linear-gradient(135deg,#E53935,#F5A623)',display:'flex',alignItems:'center',justifyContent:'center',color:'white',fontWeight:700,fontSize:18,flexShrink:0 }}>{c.nama?.[0]}</div>}
+              <div style={{ flex:1 }}>
+                <p style={{ fontWeight:700,fontSize:14,margin:0 }}>{c.nama}</p>
+                <p style={{ fontSize:12,color:'#888',margin:0 }}>{c.jabatan} · {c.jenis_izin}</p>
+                <p style={{ fontSize:11,color:'#aaa',margin:0 }}>{c.tanggal_mulai} – {c.tanggal_selesai} · {c.jumlah_hari} hari</p>
+              </div>
+              <Chip status={c.status}/>
+            </div>
+            {c.status==='MENUNGGU' && <div style={{ marginTop:12,padding:'8px 12px',background:'#FFF8E1',borderRadius:10,fontSize:12,color:'#F57F17',fontWeight:600 }}>📋 Diajukan {c.diajukan_pada} · Tap untuk review</div>}
+          </Card>
+        ))}
+      </div>
+
+      {selectedItem && (
+        <Modal title="Detail Pengajuan Izin" onClose={()=>{ setSelectedItem(null); setNote('') }} wide>
+          {selectedItem.selfie_url && (
+            <div style={{ marginBottom:16,borderRadius:14,overflow:'hidden',border:'2px solid #F5A623' }}>
+              <p style={{ fontSize:11,fontWeight:700,color:'#F57F17',padding:'6px 12px',background:'#FFF8E1',margin:0 }}>📷 Selfie Pengajuan</p>
+              <img src={selectedItem.selfie_url} alt="selfie" style={{ width:'100%',maxHeight:200,objectFit:'cover' }}/>
+            </div>
+          )}
+          {[['Nama',selectedItem.nama],['NIP',selectedItem.nip],['Jenis Izin',selectedItem.jenis_izin],['Tanggal Mulai',selectedItem.tanggal_mulai],['Tanggal Selesai',selectedItem.tanggal_selesai],['Durasi',`${selectedItem.jumlah_hari} hari`],['Alasan',selectedItem.keterangan],['Tanggal Pengajuan',selectedItem.diajukan_pada],['Status',selectedItem.status]].map(([k,v])=>(
+            <div key={k} style={{ display:'flex',justifyContent:'space-between',padding:'8px 0',borderBottom:'1px solid #f5f5f5',fontSize:13 }}>
+              <span style={{ color:'#aaa',flexShrink:0 }}>{k}</span>
+              <span style={{ fontWeight:600,color:'#333',textAlign:'right',maxWidth:'55%' }}>{v}</span>
+            </div>
+          ))}
+          {selectedItem.lampiran_url && (
+            <a href={selectedItem.lampiran_url} target="_blank" rel="noreferrer" style={{ display:'flex',alignItems:'center',gap:8,padding:'10px 14px',background:'#F0FFF4',borderRadius:10,marginTop:12,textDecoration:'none' }}>
+              <span>📎</span><span style={{ fontSize:12,fontWeight:600,color:'#2E7D32' }}>{selectedItem.lampiran_nama||'Lihat Lampiran'}</span>
+            </a>
+          )}
+          {selectedItem.status==='MENUNGGU' && (
+            <div style={{ marginTop:16 }}>
+              <label style={{ fontSize:12,fontWeight:700,color:'#666',display:'block',marginBottom:6 }}>Catatan</label>
+              <textarea value={note} onChange={e=>setNote(e.target.value)} rows={2} placeholder="Opsional..." style={{ width:'100%',border:'1px solid #e0e0e0',borderRadius:12,padding:'10px 12px',fontSize:13,outline:'none',resize:'none',boxSizing:'border-box',marginBottom:10 }}/>
+              <div style={{ display:'flex',gap:8 }}>
+                <BtnGrad small outline color="red" onClick={()=>handleApproval('reject')} disabled={loading}>Tolak</BtnGrad>
+                <BtnGrad small color="green" onClick={()=>handleApproval('approve')} disabled={loading}>{loading?'Memproses...':'✅ Setujui'}</BtnGrad>
+              </div>
+            </div>
+          )}
+          {selectedItem.status!=='MENUNGGU' && (
+            <div style={{ marginTop:12,padding:12,background:'#F9F9F9',borderRadius:10,fontSize:13 }}>
+              <p style={{ margin:'0 0 4px',color:'#555' }}>Oleh: <strong>{selectedItem.approved_by||'-'}</strong></p>
+              <p style={{ margin:0,color:'#888' }}>Catatan: {selectedItem.approval_note||'-'}</p>
+            </div>
+          )}
+        </Modal>
+      )}
+    </div>
+  )
+}
+
+// ─── HRD MORE ─────────────────────────────────────────────────────────────────
+const HRDMore = ({ user, showToast, onLogout, dbData, refreshData }) => {
+  const [showAudit, setShowAudit] = useState(false)
+  const [showAnn, setShowAnn] = useState(false)
+  const [showHandbook, setShowHandbook] = useState(false)
+  const [annForm, setAnnForm] = useState({ judul:'',isi:'',type:'INFO' })
+  const [hbForm, setHbForm] = useState({ judul:'',isi:'' })
+  const [editHb, setEditHb] = useState(null)
+
+  const addAnn = async () => {
+    if(!annForm.judul||!annForm.isi){ showToast('Judul dan isi wajib diisi'); return }
+    const { error } = await supabase.from('announcements').insert({ ...annForm, tanggal:new Date().toISOString().split('T')[0], created_by:user.nama })
+    if (!error) {
+      // Notify all employees
+      const empNIPs = dbData.users.filter(u=>u.role==='EMPLOYEE').map(u=>u.nip)
+      if (empNIPs.length>0) {
+        await supabase.from('notifications').insert(empNIPs.map(nip=>({ nip, type:'PENGUMUMAN', message:`Pengumuman Baru: ${annForm.judul}` })))
+      }
+      showToast('✅ Pengumuman diterbitkan!')
+      setAnnForm({ judul:'',isi:'',type:'INFO' })
+      refreshData()
+    }
+  }
+
+  const addHb = async () => {
+    if(!hbForm.judul||!hbForm.isi){ showToast('Judul dan isi wajib diisi'); return }
+    const { error } = await supabase.from('handbook').insert({ ...hbForm, updated_at:new Date().toISOString().split('T')[0] })
+    if (!error) { showToast('✅ Handbook ditambahkan!'); setHbForm({ judul:'',isi:'' }); refreshData() }
+  }
+
+  const delAnn = async (id) => {
+    await supabase.from('announcements').delete().eq('id',id)
+    showToast('✅ Dihapus!'); refreshData()
+  }
+
+  const delHb = async (id) => {
+    await supabase.from('handbook').delete().eq('id',id)
+    showToast('✅ Dihapus!'); refreshData()
+  }
+
+  return (
+    <div style={{ flex:1,overflowY:'auto',paddingBottom:80,background:'#F8F8F8' }}>
+      <div style={{ padding:'24px 16px 12px' }}>
+        <h1 style={{ fontWeight:800,fontSize:18,margin:0 }}>Lainnya</h1>
+        <p style={{ fontSize:11,color:'#aaa',margin:0 }}>Fitur tambahan HRD</p>
+      </div>
+      <div style={{ padding:'0 16px',display:'flex',flexDirection:'column',gap:10 }}>
+        {[
+          ['📣','Kelola Pengumuman','Buat & hapus pengumuman',()=>setShowAnn(true)],
+          ['📖','Kelola Handbook','Panduan perusahaan',()=>setShowHandbook(true)],
+          ['🔍','Log Aktivitas','Riwayat aktivitas sistem',()=>setShowAudit(true)],
+        ].map(([icon,lbl,sub,fn])=>(
+          <button key={lbl} onClick={fn} style={{ display:'flex',alignItems:'center',gap:14,padding:16,background:'white',borderRadius:16,border:'none',cursor:'pointer',boxShadow:'0 4px 16px rgba(0,0,0,0.06)',textAlign:'left',width:'100%' }}>
+            <div style={{ width:44,height:44,borderRadius:14,background:'#FFF5F5',display:'flex',alignItems:'center',justifyContent:'center',fontSize:20 }}>{icon}</div>
+            <div style={{ flex:1 }}>
+              <p style={{ fontWeight:700,fontSize:14,margin:0 }}>{lbl}</p>
+              <p style={{ fontSize:12,color:'#aaa',margin:0 }}>{sub}</p>
+            </div>
+            <span style={{ color:'#ccc',fontSize:18 }}>›</span>
+          </button>
+        ))}
+        <button onClick={onLogout} style={{ padding:14,borderRadius:14,color:'#E53935',fontWeight:700,fontSize:14,border:'2px solid #FFCDD2',background:'white',cursor:'pointer',marginTop:4,width:'100%' }}>← Keluar</button>
+      </div>
+
+      {showAudit && (
+        <Modal title="Log Aktivitas" onClose={()=>setShowAudit(false)} wide>
+          {dbData.auditLog.slice(0,30).map(a=>(
+            <div key={a.id} style={{ padding:'10px 0',borderBottom:'1px solid #f5f5f5' }}>
+              <p style={{ fontSize:13,fontWeight:600,margin:'0 0 2px' }}>{a.aktivitas}</p>
+              <p style={{ fontSize:11,color:'#aaa',margin:0 }}>{a.user_name} · {new Date(a.created_at).toLocaleString('id-ID')}</p>
+              {a.keterangan && <p style={{ fontSize:11,color:'#888',margin:'2px 0 0' }}>{a.keterangan}</p>}
+            </div>
+          ))}
+          {dbData.auditLog.length===0 && <p style={{ textAlign:'center',color:'#aaa',padding:24,fontSize:13 }}>Belum ada log aktivitas</p>}
+        </Modal>
+      )}
+
+      {showAnn && (
+        <Modal title="Kelola Pengumuman" onClose={()=>setShowAnn(false)} wide>
+          <div style={{ display:'flex',flexDirection:'column',gap:10,marginBottom:16 }}>
+            <input value={annForm.judul} onChange={e=>setAnnForm({...annForm,judul:e.target.value})} placeholder="Judul pengumuman" style={{ width:'100%',border:'1px solid #e0e0e0',borderRadius:12,padding:'10px 12px',fontSize:13,outline:'none',boxSizing:'border-box' }}/>
+            <select value={annForm.type} onChange={e=>setAnnForm({...annForm,type:e.target.value})} style={{ width:'100%',border:'1px solid #e0e0e0',borderRadius:12,padding:'10px 12px',fontSize:13,outline:'none' }}>
+              {['INFO','LIBUR','KEBIJAKAN'].map(t=><option key={t}>{t}</option>)}
+            </select>
+            <textarea value={annForm.isi} onChange={e=>setAnnForm({...annForm,isi:e.target.value})} rows={3} placeholder="Isi pengumuman..." style={{ width:'100%',border:'1px solid #e0e0e0',borderRadius:12,padding:'10px 12px',fontSize:13,outline:'none',resize:'none',boxSizing:'border-box' }}/>
+            <BtnGrad small onClick={addAnn}>+ Terbitkan</BtnGrad>
+          </div>
+          <div style={{ borderTop:'1px solid #f0f0f0',paddingTop:12 }}>
+            {dbData.announcements.map(a=>(
+              <div key={a.id} style={{ display:'flex',alignItems:'center',gap:10,padding:'10px 0',borderBottom:'1px solid #f9f9f9' }}>
+                <div style={{ flex:1 }}>
+                  <p style={{ fontWeight:700,fontSize:13,margin:0 }}>{a.judul}</p>
+                  <p style={{ fontSize:11,color:'#aaa',margin:0 }}>{a.type} · {a.tanggal}</p>
+                </div>
+                <button onClick={()=>delAnn(a.id)} style={{ background:'#FFF5F5',border:'none',borderRadius:8,padding:'6px 10px',color:'#E53935',cursor:'pointer',fontSize:12,fontWeight:700 }}>Hapus</button>
+              </div>
+            ))}
+          </div>
+        </Modal>
+      )}
+
+      {showHandbook && (
+        <Modal title="Kelola Handbook" onClose={()=>setShowHandbook(false)} wide>
+          <div style={{ display:'flex',flexDirection:'column',gap:10,marginBottom:16 }}>
+            <input value={hbForm.judul} onChange={e=>setHbForm({...hbForm,judul:e.target.value})} placeholder="Judul halaman" style={{ width:'100%',border:'1px solid #e0e0e0',borderRadius:12,padding:'10px 12px',fontSize:13,outline:'none',boxSizing:'border-box' }}/>
+            <textarea value={hbForm.isi} onChange={e=>setHbForm({...hbForm,isi:e.target.value})} rows={3} placeholder="Isi handbook..." style={{ width:'100%',border:'1px solid #e0e0e0',borderRadius:12,padding:'10px 12px',fontSize:13,outline:'none',resize:'none',boxSizing:'border-box' }}/>
+            <BtnGrad small onClick={addHb}>+ Tambah</BtnGrad>
+          </div>
+          <div style={{ borderTop:'1px solid #f0f0f0',paddingTop:12 }}>
+            {dbData.handbook.map(hb=>(
+              <div key={hb.id} style={{ display:'flex',alignItems:'center',gap:10,padding:'10px 0',borderBottom:'1px solid #f9f9f9' }}>
+                <div style={{ flex:1 }}>
+                  <p style={{ fontWeight:700,fontSize:13,margin:0 }}>{hb.judul}</p>
+                  <p style={{ fontSize:11,color:'#aaa',margin:0 }}>Diperbarui: {hb.updated_at}</p>
+                </div>
+                <button onClick={()=>delHb(hb.id)} style={{ background:'#FFF5F5',border:'none',borderRadius:8,padding:'6px 10px',color:'#E53935',cursor:'pointer',fontSize:12,fontWeight:700 }}>Hapus</button>
+              </div>
+            ))}
+          </div>
+        </Modal>
+      )}
+    </div>
+  )
+}
+
+// ─── HRD NAV ──────────────────────────────────────────────────────────────────
+const HRDNav = ({ active, onChange, dbData }) => {
+  const menungguIzin = dbData.izin.filter(c=>c.status==='MENUNGGU').length
+  return (
+    <div style={{ position:'fixed',bottom:0,left:0,right:0,maxWidth:430,margin:'0 auto',background:'white',borderTop:'1px solid #f0f0f0',display:'flex',zIndex:40,boxShadow:'0 -4px 20px rgba(0,0,0,0.06)' }}>
+      {[{key:'dashboard',icon:'🏠',label:'Dashboard'},{key:'karyawan',icon:'👥',label:'Karyawan'},{key:'absensi',icon:'🕒',label:'Absensi'},{key:'approval',icon:'📋',label:'Approval'},{key:'more',icon:'☰',label:'Lainnya'}].map(item=>{
+        const badge = item.key==='approval' ? menungguIzin : 0
+        return (
+          <button key={item.key} onClick={()=>onChange(item.key)} style={{ flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:2,padding:'10px 0',background:'none',border:'none',cursor:'pointer',position:'relative' }}>
+            <span style={{ fontSize:18 }}>{item.icon}</span>
+            {badge>0 && <span style={{ position:'absolute',top:6,right:'calc(50% - 14px)',width:16,height:16,background:'#E53935',borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',color:'white',fontSize:9,fontWeight:700 }}>{badge}</span>}
+            <span style={{ fontSize:10,fontWeight:700,color:active===item.key?'#E53935':'#aaa' }}>{item.label}</span>
+            {active===item.key && <span style={{ width:18,height:2,borderRadius:2,background:'#E53935' }}/>}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+// ─── LOGIN ────────────────────────────────────────────────────────────────────
+const LoginPage = ({ onLogin, onRegister }) => {
+  const [nip, setNip] = useState('')
+  const [pw, setPw] = useState('')
+  const [showPw, setShowPw] = useState(false)
+  const [err, setErr] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  const login = async () => {
+    setErr('')
+    if(!nip||!pw){ setErr('NIP dan Password wajib diisi'); return }
+    setLoading(true)
+    const { data, error } = await supabase.from('users').select('*').eq('nip',nip).eq('password',pw).eq('status','aktif').single()
+    if (error || !data) {
+      setErr('NIP atau Password salah')
+    } else {
+      const { data: empData } = await supabase.from('master_karyawan').select('*').eq('nip',nip).single()
+      await supabase.from('audit_log').insert({ user_name:data.nama, nip:data.nip, aktivitas:'Login ke sistem', keterangan:'' })
+      onLogin({ ...data, ...(empData||{}), role: data.role })
+    }
+    setLoading(false)
+  }
+
+  return (
+    <div style={{ minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',padding:16,background:'#FBF5F5',position:'relative',overflow:'hidden' }}>
+      <div style={{ position:'absolute',top:0,left:0,width:180,height:180,borderRadius:'50%',background:'#FFCDD2',opacity:0.3,transform:'translate(-30%,-30%)' }}/>
+      <div style={{ position:'absolute',bottom:80,right:0,width:140,height:140,borderRadius:'50% 0 0 50%',background:'#FFE0B2',opacity:0.4 }}/>
+      <div style={{ width:'100%',maxWidth:360,background:'white',borderRadius:24,padding:32,position:'relative',boxShadow:'0 20px 60px rgba(0,0,0,0.10)' }}>
+        <div style={{ display:'flex',flexDirection:'column',alignItems:'center',marginBottom:24 }}>
+          <WellJoyLogo size={100}/>
+          <h1 style={{ fontSize:22,fontWeight:800,margin:'8px 0 2px',color:'#111' }}>WellJoy <span style={{ color:'#E53935' }}>HRIS</span></h1>
+          <p style={{ fontSize:13,color:'#aaa',margin:0 }}>Sistem Informasi Karyawan</p>
+        </div>
+        {err && <div style={{ marginBottom:14,background:'#FFF5F5',border:'1px solid #FFCDD2',color:'#C62828',fontSize:13,padding:'10px 14px',borderRadius:12 }}>{err}</div>}
+        <div style={{ marginBottom:12 }}>
+          <label style={{ display:'block',fontSize:12,fontWeight:700,color:'#666',marginBottom:6 }}>NIP</label>
+          <div style={{ display:'flex',alignItems:'center',background:'white',border:'1px solid #e0e0e0',borderRadius:14,padding:'10px 14px',gap:8,boxShadow:'0 2px 6px rgba(0,0,0,0.04)' }}>
+            <span>👤</span><input value={nip} onChange={e=>setNip(e.target.value)} onKeyDown={e=>e.key==='Enter'&&login()} placeholder="Contoh: 10001" style={{ flex:1,outline:'none',fontSize:13,border:'none',background:'transparent' }}/>
+          </div>
+        </div>
+        <div style={{ marginBottom:20 }}>
+          <label style={{ display:'block',fontSize:12,fontWeight:700,color:'#666',marginBottom:6 }}>Password</label>
+          <div style={{ display:'flex',alignItems:'center',background:'white',border:'1px solid #e0e0e0',borderRadius:14,padding:'10px 14px',gap:8,boxShadow:'0 2px 6px rgba(0,0,0,0.04)' }}>
+            <span>🔒</span><input type={showPw?'text':'password'} value={pw} onChange={e=>setPw(e.target.value)} onKeyDown={e=>e.key==='Enter'&&login()} placeholder="••••••••" style={{ flex:1,outline:'none',fontSize:13,border:'none',background:'transparent' }}/>
+            <button onClick={()=>setShowPw(!showPw)} style={{ background:'none',border:'none',cursor:'pointer',fontSize:16,color:'#aaa' }}>{showPw?'🙈':'👁️'}</button>
+          </div>
+        </div>
+        <BtnGrad onClick={login} disabled={loading}>{loading?'Memverifikasi...':'Masuk Sekarang'}</BtnGrad>
+        <p style={{ textAlign:'center',fontSize:13,color:'#888',marginTop:16 }}>Belum punya akun? <button onClick={onRegister} style={{ background:'none',border:'none',color:'#F5A623',fontWeight:700,cursor:'pointer',fontSize:13 }}>Daftar</button></p>
+        <div style={{ marginTop:16,padding:12,borderRadius:12,background:'#F9F9F9',fontSize:12,color:'#aaa' }}>
+          <p style={{ fontWeight:700,color:'#777',margin:'0 0 6px' }}>Demo Accounts:</p>
+          <p style={{ margin:'0 0 4px' }}>👤 Karyawan: <strong>10001</strong> / password123</p>
+          <p style={{ margin:0 }}>🧑‍💼 HRD: <strong>20001</strong> / hrd123</p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── REGISTER ────────────────────────────────────────────────────────────────
+const RegisterPage = ({ onBack }) => {
+  const [form, setForm] = useState({ nip:'',nama:'',email:'',noHp:'',pw:'',konfirmasi:'' })
+  const [agree, setAgree] = useState(false)
+  const [err, setErr] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [ok, setOk] = useState(false)
+  const set = k => e => setForm({...form,[k]:e.target.value})
+
+  const submit = async () => {
+    setErr('')
+    if(!form.nip||!form.nama||!form.email||!form.pw){ setErr('Semua field wajib diisi'); return }
+    if(form.pw.length<8){ setErr('Password minimal 8 karakter'); return }
+    if(form.pw!==form.konfirmasi){ setErr('Password tidak cocok'); return }
+    if(!agree){ setErr('Harap setujui syarat & ketentuan'); return }
+    setLoading(true)
+    // Cek apakah NIP terdaftar di master_karyawan
+    const { data: emp } = await supabase.from('master_karyawan').select('nip').eq('nip',form.nip).single()
+    if (!emp) { setErr('NIP tidak ditemukan di sistem'); setLoading(false); return }
+    // Update password dan email di users & master_karyawan
+    const { error } = await supabase.from('users').update({ password:form.pw, email:form.email, no_hp:form.noHp }).eq('nip',form.nip)
+    if (error) { setErr('Gagal memperbarui akun'); setLoading(false); return }
+    await supabase.from('master_karyawan').update({ email:form.email, no_hp:form.noHp }).eq('nip',form.nip)
+    setOk(true)
+    setLoading(false)
+  }
+
+  if(ok) return (
+    <div style={{ minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',padding:16,background:'#FBF5F5' }}>
+      <div style={{ background:'white',borderRadius:24,padding:32,width:'100%',maxWidth:360,textAlign:'center',boxShadow:'0 20px 60px rgba(0,0,0,0.10)' }}>
+        <div style={{ fontSize:48,marginBottom:12 }}>🎉</div>
+        <h2 style={{ fontWeight:700,margin:'0 0 8px' }}>Berhasil!</h2>
+        <p style={{ color:'#888',fontSize:13,marginBottom:24 }}>Akun telah diperbarui. Silakan login.</p>
+        <BtnGrad onClick={onBack}>Masuk Sekarang</BtnGrad>
+      </div>
+    </div>
+  )
+
+  return (
+    <div style={{ minHeight:'100vh',padding:16,background:'#FBF5F5' }}>
+      <button onClick={onBack} style={{ color:'#E53935',fontSize:20,background:'none',border:'none',cursor:'pointer',paddingTop:16,paddingBottom:8,display:'block' }}>←</button>
+      <div style={{ display:'flex',flexDirection:'column',alignItems:'center',marginBottom:16 }}><WellJoyLogo size={80}/><h1 style={{ fontSize:20,fontWeight:800,margin:'4px 0 0' }}>Daftar <span style={{ color:'#E53935' }}>Akun</span></h1></div>
+      <div style={{ background:'white',borderRadius:24,padding:24,boxShadow:'0 20px 60px rgba(0,0,0,0.08)' }}>
+        {err && <div style={{ marginBottom:12,background:'#FFF5F5',border:'1px solid #FFCDD2',color:'#C62828',fontSize:13,padding:'10px 14px',borderRadius:12 }}>{err}</div>}
+        {[['NIP','nip','NIP Anda'],['Nama','nama','Nama lengkap'],['Email','email','Email aktif'],['No. HP','noHp','Nomor HP'],['Password Baru','pw','Min. 8 karakter'],['Konfirmasi Password','konfirmasi','Ulangi password']].map(([lbl,k,ph])=>(
+          <div key={k} style={{ marginBottom:10 }}>
+            <label style={{ display:'block',fontSize:12,fontWeight:700,color:'#666',marginBottom:6 }}>{lbl}</label>
+            <input type={k.includes('pw')||k==='konfirmasi'?'password':'text'} value={form[k]} onChange={set(k)} placeholder={ph} style={{ width:'100%',border:'1px solid #e0e0e0',borderRadius:12,padding:'10px 12px',fontSize:13,outline:'none',boxSizing:'border-box' }}/>
+          </div>
+        ))}
+        <label style={{ display:'flex',alignItems:'flex-start',gap:8,marginBottom:16,cursor:'pointer' }}>
+          <input type="checkbox" checked={agree} onChange={e=>setAgree(e.target.checked)} style={{ marginTop:2,width:16,height:16 }}/>
+          <span style={{ fontSize:12,color:'#666' }}>Saya menyetujui <span style={{ color:'#E53935' }}>Syarat & Ketentuan</span></span>
+        </label>
+        <BtnGrad onClick={submit} disabled={loading}>{loading?'Memproses...':'Setel Password'}</BtnGrad>
+      </div>
+    </div>
+  )
+}
+
+// ─── APP ROOT ─────────────────────────────────────────────────────────────────
+export default function WellJoyApp() {
+  const [screen, setScreen] = useState('login')
+  const [user, setUser] = useState(null)
+  const [empNav, setEmpNav] = useState('home')
+  const [hrdNav, setHrdNav] = useState('dashboard')
+  const [toast, setToast] = useState('')
+  const [dbData, setDbData] = useState({
+    users: [], karyawan: [], attendance: [], izin: [],
+    notifications: [], auditLog: [], announcements: [], handbook: []
+  })
+  const [loadingData, setLoadingData] = useState(false)
+
+  const showToast = useCallback(msg=>{ setToast(msg); setTimeout(()=>setToast(''),3000) },[])
+
+  const fetchData = useCallback(async () => {
+    setLoadingData(true)
+    try {
+      const [
+        { data: users },
+        { data: karyawan },
+        { data: attendance },
+        { data: izin },
+        { data: notifications },
+        { data: auditLog },
+        { data: announcements },
+        { data: handbook },
+      ] = await Promise.all([
+        supabase.from('users').select('*').order('created_at'),
+        supabase.from('master_karyawan').select('*').order('nama'),
+        supabase.from('attendance').select('*').order('tanggal',{ascending:false}),
+        supabase.from('izin').select('*').order('created_at',{ascending:false}),
+        supabase.from('notifications').select('*').order('created_at',{ascending:false}),
+        supabase.from('audit_log').select('*').order('created_at',{ascending:false}).limit(50),
+        supabase.from('announcements').select('*').order('tanggal',{ascending:false}),
+        supabase.from('handbook').select('*').order('created_at'),
+      ])
+      setDbData({
+        users: users||[], karyawan: karyawan||[], attendance: attendance||[],
+        izin: izin||[], notifications: notifications||[], auditLog: auditLog||[],
+        announcements: announcements||[], handbook: handbook||[]
+      })
+    } catch(e) { console.error('Error fetching data:', e) }
+    setLoadingData(false)
+  }, [])
+
+  useEffect(() => {
+    if (screen === 'app') fetchData()
+  }, [screen, fetchData])
+
+  const handleLogin = (userData) => {
+    setUser(userData)
+    setScreen('app')
+    if(userData.role==='HRD') setHrdNav('dashboard')
+    else setEmpNav('home')
+  }
+
+  const handleLogout = async () => {
+    if(user) await supabase.from('audit_log').insert({ user_name:user.nama, nip:user.nip, aktivitas:'Logout dari sistem', keterangan:'' })
+    setUser(null)
+    setScreen('login')
+    setDbData({ users:[], karyawan:[], attendance:[], izin:[], notifications:[], auditLog:[], announcements:[], handbook:[] })
+  }
+
+  if(screen==='login') return <LoginPage onLogin={handleLogin} onRegister={()=>setScreen('register')}/>
+  if(screen==='register') return <RegisterPage onBack={()=>setScreen('login')}/>
+
+  const isHRD = user?.role === 'HRD'
+  const commonProps = { user, showToast, dbData, refreshData: fetchData }
+
+  return (
+    <div style={{ minHeight:'100vh',display:'flex',flexDirection:'column',maxWidth:430,margin:'0 auto',background:'#F8F8F8' }}>
+      <Toast msg={toast}/>
+      {loadingData && screen==='app' && dbData.karyawan.length===0 && (
+        <div style={{ flex:1,display:'flex',alignItems:'center',justifyContent:'center' }}><Loader/></div>
+      )}
+      {(!loadingData || dbData.karyawan.length>0) && (
+        isHRD ? (
+          <>
+            {hrdNav==='dashboard' && <HRDDashboard {...commonProps} onNavChange={setHrdNav}/>}
+            {hrdNav==='karyawan'  && <HRDKaryawan  {...commonProps}/>}
+            {hrdNav==='absensi'   && <HRDAbsensi   {...commonProps}/>}
+            {hrdNav==='approval'  && <HRDApproval  {...commonProps}/>}
+            {hrdNav==='more'      && <HRDMore      {...commonProps} onLogout={handleLogout}/>}
+            <HRDNav active={hrdNav} onChange={setHrdNav} dbData={dbData}/>
+          </>
+        ) : (
+          <>
+            {screen==='ajukanIzin'
+              ? <EmpAjukanIzin {...commonProps} onBack={()=>setScreen('app')}/>
+              : <>
+                  {empNav==='home' && <EmpHome {...commonProps} onLogout={handleLogout}/>}
+                  {empNav==='izin' && <EmpIzin {...commonProps} onAjukan={()=>setScreen('ajukanIzin')}/>}
+                  {empNav==='slip' && <EmpSlipGaji {...commonProps}/>}
+                  <EmpNav active={empNav} onChange={setEmpNav}/>
+                </>
+            }
+          </>
+        )
+      )}
+    </div>
+  )
+}
