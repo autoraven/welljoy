@@ -34,3 +34,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+supabase/schema.sql
+README.md
+public/logo/TARUH_LOGO_DISINI.md
+.env.example
