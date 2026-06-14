@@ -82,7 +82,10 @@ const BtnGrad = ({ children, onClick, disabled=false, small=false, outline=false
 }
 
 const Modal = ({ title, onClose, children, wide=false }) => (
-  <div style={{ position:'fixed',inset:0,zIndex:50,display:'flex',alignItems:'flex-end',justifyContent:'center',background:'rgba(0,0,0,0.55)' }}>
+  <div
+    style={{ position:'fixed',inset:0,zIndex:50,display:'flex',alignItems:'flex-end',justifyContent:'center',background:'rgba(0,0,0,0.55)' }}
+    onClick={e=>{ if(e.target===e.currentTarget) onClose() }}
+  >
     <div style={{ width:'100%',maxWidth:wide?640:460,background:'white',borderRadius:'24px 24px 0 0',padding:20,overflowY:'auto',maxHeight:'92vh' }}>
       <div style={{ display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:16 }}>
         <h2 style={{ fontWeight:800,fontSize:16,margin:0 }}>{title}</h2>
@@ -93,8 +96,8 @@ const Modal = ({ title, onClose, children, wide=false }) => (
   </div>
 )
 
-const Card = ({ children, style={} }) => (
-  <div style={{ background:'white',borderRadius:16,boxShadow:'0 4px 16px rgba(0,0,0,0.06)',...style }}>{children}</div>
+const Card = ({ children, style={}, onClick }) => (
+  <div onClick={onClick} style={{ background:'white',borderRadius:16,boxShadow:'0 4px 16px rgba(0,0,0,0.06)',cursor:onClick?'pointer':'default',...style }}>{children}</div>
 )
 
 const NotifBell = ({ nip, onOpen, notifications=[] }) => {
@@ -134,36 +137,82 @@ const NotifPanel = ({ nip, onClose, notifications=[], onMarkRead, onMarkAllRead,
 const CameraModal = ({ mode, onCapture, onClose }) => {
   const videoRef = useRef(null)
   const canvasRef = useRef(null)
+  const streamRef = useRef(null)
   const [streaming, setStreaming] = useState(false)
   const [captured, setCaptured] = useState(null)
   const [err, setErr] = useState('')
+
   useEffect(()=>{
+    let active = true
     navigator.mediaDevices?.getUserMedia({ video:{facingMode:'user'}, audio:false })
-      .then(s=>{ if(videoRef.current){ videoRef.current.srcObject=s; setStreaming(true); }})
-      .catch(()=>setErr('Izin kamera ditolak.'))
-    return ()=>{ if(videoRef.current?.srcObject) videoRef.current.srcObject.getTracks().forEach(t=>t.stop()); }
+      .then(s=>{
+        streamRef.current = s
+        if(active && videoRef.current){ videoRef.current.srcObject=s; setStreaming(true) }
+      })
+      .catch(()=>setErr('Izin kamera ditolak atau tidak tersedia.'))
+    return ()=>{
+      active = false
+      streamRef.current?.getTracks().forEach(t=>t.stop())
+    }
   },[])
-  const capture=()=>{ const c=canvasRef.current,v=videoRef.current; c.width=v.videoWidth; c.height=v.videoHeight; c.getContext('2d').drawImage(v,0,0); setCaptured(c.toDataURL('image/jpeg')); }
+
+  const stopStream = () => streamRef.current?.getTracks().forEach(t=>t.stop())
+
+  const capture = () => {
+    const c=canvasRef.current, v=videoRef.current
+    if(!c||!v) return
+    c.width=v.videoWidth; c.height=v.videoHeight
+    c.getContext('2d').drawImage(v,0,0)
+    setCaptured(c.toDataURL('image/jpeg',0.85))
+    stopStream()
+  }
+
+  const handleConfirm = () => {
+    onCapture(captured)
+    onClose()
+  }
+
+  const handleUlang = () => {
+    setCaptured(null)
+    navigator.mediaDevices?.getUserMedia({ video:{facingMode:'user'}, audio:false })
+      .then(s=>{ streamRef.current=s; if(videoRef.current){ videoRef.current.srcObject=s; setStreaming(true) } })
+      .catch(()=>{})
+  }
+
+  const handleClose = () => { stopStream(); onClose() }
+
   return (
     <div style={{ position:'fixed',inset:0,zIndex:60,display:'flex',alignItems:'flex-end',background:'rgba(0,0,0,0.7)' }}>
       <div style={{ width:'100%',background:'white',borderRadius:'24px 24px 0 0',padding:20 }}>
         <div style={{ display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16 }}>
           <h2 style={{ fontWeight:700,margin:0,fontSize:16 }}>📷 {mode==='in'?'Clock In':'Clock Out'} Selfie</h2>
-          <button onClick={onClose} style={{ background:'none',border:'none',fontSize:22,cursor:'pointer',color:'#aaa' }}>×</button>
+          <button onClick={handleClose} style={{ background:'none',border:'none',fontSize:22,cursor:'pointer',color:'#aaa' }}>×</button>
         </div>
-        {err ? <div style={{ textAlign:'center',padding:32 }}><p style={{ color:'#E53935',marginBottom:16 }}>{err}</p><button onClick={onClose} style={{ color:'#888',fontSize:13,background:'none',border:'none',cursor:'pointer' }}>Tutup</button></div>
-        : <>
-            <div style={{ borderRadius:16,overflow:'hidden',background:'#000',marginBottom:16,height:240 }}>
-              {!captured ? <video ref={videoRef} autoPlay playsInline style={{ width:'100%',height:'100%',objectFit:'cover' }}/> : <img src={captured} alt="" style={{ width:'100%',height:'100%',objectFit:'cover' }}/>}
-              <canvas ref={canvasRef} style={{ display:'none' }}/>
+        {err
+          ? <div style={{ textAlign:'center',padding:32 }}>
+              <p style={{ color:'#E53935',marginBottom:8 }}>{err}</p>
+              <p style={{ fontSize:12,color:'#aaa',marginBottom:16 }}>Pastikan browser memiliki izin kamera</p>
+              <button onClick={handleClose} style={{ color:'#888',fontSize:13,background:'none',border:'none',cursor:'pointer' }}>Tutup</button>
             </div>
-            {!captured ? <BtnGrad onClick={capture} disabled={!streaming}>📸 Ambil Foto</BtnGrad>
-            : <div style={{ display:'flex',flexDirection:'column',gap:8 }}>
-                <BtnGrad onClick={()=>{ onCapture(captured); onClose(); }}>✅ Konfirmasi {mode==='in'?'Clock In':'Clock Out'}</BtnGrad>
-                <button onClick={()=>setCaptured(null)} style={{ padding:12,background:'none',border:'none',color:'#888',fontSize:13,cursor:'pointer',fontWeight:600 }}>Ulangi Foto</button>
+          : <>
+              <div style={{ borderRadius:16,overflow:'hidden',background:'#000',marginBottom:16,height:260,position:'relative' }}>
+                {!captured
+                  ? <video ref={videoRef} autoPlay playsInline muted style={{ width:'100%',height:'100%',objectFit:'cover' }}/>
+                  : <img src={captured} alt="preview" style={{ width:'100%',height:'100%',objectFit:'cover' }}/>
+                }
+                <canvas ref={canvasRef} style={{ display:'none' }}/>
+                {!streaming && !captured && !err && (
+                  <div style={{ position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center',color:'white',fontSize:13 }}>Memuat kamera...</div>
+                )}
               </div>
-            }
-          </>
+              {!captured
+                ? <BtnGrad onClick={capture} disabled={!streaming}>📸 Ambil Foto</BtnGrad>
+                : <div style={{ display:'flex',flexDirection:'column',gap:8 }}>
+                    <BtnGrad color="green" onClick={handleConfirm}>✅ Konfirmasi {mode==='in'?'Clock In':'Clock Out'}</BtnGrad>
+                    <button onClick={handleUlang} style={{ padding:12,background:'none',border:'none',color:'#888',fontSize:13,cursor:'pointer',fontWeight:600 }}>🔄 Ulangi Foto</button>
+                  </div>
+              }
+            </>
         }
       </div>
     </div>
@@ -280,7 +329,7 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
         <button onClick={onLogout} style={{ padding:14,borderRadius:14,color:'#E53935',fontWeight:700,fontSize:14,border:'2px solid #FFCDD2',background:'white',cursor:'pointer',marginTop:4,width:'100%' }}>← Keluar</button>
       </div>
 
-      {camera && <CameraModal mode={camera.mode} onCapture={foto=>{camera.cb(foto)}} onClose={()=>setCamera(null)}/>}
+      {camera && <CameraModal mode={camera.mode} onCapture={foto=>{ camera.cb(foto); setCamera(null) }} onClose={()=>setCamera(null)}/>}
 
       {showAnn && (
         <Modal title="Pengumuman HRD" onClose={()=>{ setShowAnn(false); setSelectedAnn(null) }}>
@@ -1368,8 +1417,13 @@ export default function WellJoyApp() {
 
   useEffect(()=>{ if(screen==='app') fetchData() },[screen,fetchData])
 
+  const [ajukanIzin, setAjukanIzin] = useState(false)
+
   const handleLogin = userData=>{ setUser(userData); setScreen('app'); if(userData.role==='HRD') setHrdNav('dashboard'); else setEmpNav('home') }
-  const handleLogout = async()=>{ if(user) await supabase.from('audit_log').insert({ user_name:user.nama,nip:user.nip,aktivitas:'Logout dari sistem',keterangan:'' }); setUser(null); setScreen('login') }
+  const handleLogout = async()=>{
+    if(user) await supabase.from('audit_log').insert({ user_name:user.nama,nip:user.nip,aktivitas:'Logout dari sistem',keterangan:'' })
+    setUser(null); setScreen('login'); setAjukanIzin(false)
+  }
 
   if(screen==='login') return <LoginPage onLogin={handleLogin} onRegister={()=>setScreen('register')}/>
   if(screen==='register') return <RegisterPage onBack={()=>setScreen('login')}/>
@@ -1398,13 +1452,13 @@ export default function WellJoyApp() {
         </>
       ) : (
         <>
-          {screen==='ajukanIzin'
-            ? <EmpAjukanIzin {...commonProps} onBack={()=>setScreen('app')}/>
+          {ajukanIzin
+            ? <EmpAjukanIzin {...commonProps} onBack={()=>setAjukanIzin(false)}/>
             : <>
                 {empNav==='home' && <EmpHome {...commonProps} onLogout={handleLogout}/>}
-                {empNav==='izin' && <EmpIzin {...commonProps} onAjukan={()=>setScreen('ajukanIzin')}/>}
+                {empNav==='izin' && <EmpIzin {...commonProps} onAjukan={()=>setAjukanIzin(true)}/>}
                 {empNav==='slip' && <EmpSlipGaji {...commonProps}/>}
-                <EmpNav active={empNav} onChange={setEmpNav}/>
+                <EmpNav active={empNav} onChange={v=>{ setEmpNav(v); setAjukanIzin(false) }}/>
               </>
           }
         </>
