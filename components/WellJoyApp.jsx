@@ -151,160 +151,235 @@ const compressImage = (dataUrl, maxWidth=800, quality=0.6) => {
 }
 
 // ─── GET LOCATION ─────────────────────────────────────────────────────────────
-const getLocation = () => new Promise((resolve) => {
-  if (!navigator.geolocation) { resolve({ coords: null, label: 'Lokasi tidak tersedia' }); return }
+const getLocation = () => new Promise((resolve, reject) => {
+  if (!navigator.geolocation) {
+    reject(new Error('Geolocation tidak didukung browser ini'))
+    return
+  }
   navigator.geolocation.getCurrentPosition(
     async (pos) => {
       const { latitude: lat, longitude: lng } = pos.coords
-      let label = `${lat.toFixed(5)}, ${lng.toFixed(5)}`
+      const coords = `${lat.toFixed(6)},${lng.toFixed(6)}`
+      let label = coords
       try {
-        const res = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`)
+        const res = await fetch(
+          `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`,
+          { headers: { 'Accept-Language': 'id' } }
+        )
         const data = await res.json()
-        const addr = data.address
-        // Ambil nama lokasi yang paling relevan
+        const addr = data.address || {}
         const parts = [
-          addr.road || addr.pedestrian || addr.footway,
-          addr.suburb || addr.neighbourhood || addr.village,
-          addr.city || addr.town || addr.county,
+          addr.road || addr.pedestrian || addr.footway || addr.neighbourhood,
+          addr.suburb || addr.village || addr.town || addr.city,
         ].filter(Boolean)
-        if (parts.length > 0) label = parts.slice(0,2).join(', ')
-      } catch { /* fallback ke koordinat */ }
-      resolve({ coords: `${lat.toFixed(6)},${lng.toFixed(6)}`, label })
+        if (parts.length > 0) label = parts.join(', ')
+      } catch { /* fallback coords */ }
+      resolve({ coords, label })
     },
-    () => resolve({ coords: null, label: 'Izin lokasi ditolak' }),
-    { enableHighAccuracy: true, timeout: 8000 }
+    (err) => {
+      if (err.code === 1) reject(new Error('DENIED'))
+      else reject(new Error('Gagal mendapatkan lokasi. Coba lagi.'))
+    },
+    { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
   )
 })
 
 // ─── CAMERA MODAL ─────────────────────────────────────────────────────────────
 const CameraModal = ({ mode, onCapture, onClose }) => {
-  const videoRef = useRef(null)
-  const canvasRef = useRef(null)
-  const streamRef = useRef(null)
+  const videoRef    = useRef(null)
+  const canvasRef   = useRef(null)
+  const streamRef   = useRef(null)
+  const locationRef = useRef(null)   // ← simpan lokasi di ref agar tidak kena stale closure
+  const [step, setStep]           = useState('requesting_location')
   const [streaming, setStreaming] = useState(false)
-  const [captured, setCaptured] = useState(null)
-  const [location, setLocation] = useState(null)
-  const [loadingLoc, setLoadingLoc] = useState(false)
+  const [captured, setCaptured]   = useState(null)
+  const [locDisplay, setLocDisplay] = useState(null)  // hanya untuk tampilan
   const [compressing, setCompressing] = useState(false)
-  const [err, setErr] = useState('')
+  const [errMsg, setErrMsg]       = useState('')
 
-  useEffect(()=>{
-    let active = true
-    // Mulai ambil lokasi bersamaan dengan kamera
-    setLoadingLoc(true)
-    getLocation().then(loc => { if(active) { setLocation(loc); setLoadingLoc(false) } })
-    navigator.mediaDevices?.getUserMedia({ video:{ facingMode:'user', width:{ideal:1280}, height:{ideal:720} }, audio:false })
-      .then(s=>{
-        streamRef.current = s
-        if(active && videoRef.current){ videoRef.current.srcObject=s; setStreaming(true) }
+  const stopStream = () => streamRef.current?.getTracks().forEach(t => t.stop())
+
+  const startCamera = () =>
+    navigator.mediaDevices.getUserMedia({ video:{ facingMode:'user', width:{ideal:1280} }, audio:false })
+      .then(stream => {
+        streamRef.current = stream
+        if (videoRef.current) videoRef.current.srcObject = stream
+        setStreaming(true)
+        setStep('ready')
       })
-      .catch(()=>setErr('Izin kamera ditolak atau tidak tersedia.'))
-    return ()=>{
-      active = false
-      streamRef.current?.getTracks().forEach(t=>t.stop())
-    }
-  },[])
 
-  const stopStream = () => streamRef.current?.getTracks().forEach(t=>t.stop())
+  useEffect(() => {
+    getLocation()
+      .then(loc => {
+        locationRef.current = loc        // simpan ke ref SEGERA
+        setLocDisplay(loc)               // update UI
+        setStep('requesting_camera')
+        return startCamera()
+      })
+      .catch(err => {
+        setErrMsg(err.message === 'DENIED' ? 'LOCATION_DENIED' : (err.message || 'Gagal memuat.'))
+        setStep('error')
+      })
+    return () => stopStream()
+  }, [])
 
   const capture = async () => {
-    const c=canvasRef.current, v=videoRef.current
-    if(!c||!v) return
-    c.width=v.videoWidth; c.height=v.videoHeight
-    c.getContext('2d').drawImage(v,0,0)
+    const v = videoRef.current, c = canvasRef.current
+    if (!v || !c) return
+    c.width = v.videoWidth; c.height = v.videoHeight
+    c.getContext('2d').drawImage(v, 0, 0)
     setCompressing(true)
-    const raw = c.toDataURL('image/jpeg', 1)
-    const compressed = await compressImage(raw, 800, 0.6)
+    const compressed = await compressImage(c.toDataURL('image/jpeg', 1), 800, 0.6)
     setCaptured(compressed)
     setCompressing(false)
     stopStream()
+    setStep('captured')
   }
 
   const handleConfirm = () => {
-    onCapture(captured, location)
+    // Gunakan ref — dijamin tidak stale
+    onCapture(captured, locationRef.current)
     onClose()
   }
 
   const handleUlang = () => {
     setCaptured(null)
-    setLocation(null)
-    setLoadingLoc(true)
-    getLocation().then(loc => { setLocation(loc); setLoadingLoc(false) })
-    navigator.mediaDevices?.getUserMedia({ video:{ facingMode:'user' }, audio:false })
-      .then(s=>{ streamRef.current=s; if(videoRef.current){ videoRef.current.srcObject=s; setStreaming(true) } })
-      .catch(()=>{})
+    locationRef.current = null
+    setLocDisplay(null)
+    setStep('requesting_location')
+    getLocation()
+      .then(loc => {
+        locationRef.current = loc
+        setLocDisplay(loc)
+        setStep('requesting_camera')
+        return startCamera()
+      })
+      .catch(err => {
+        setErrMsg(err.message === 'DENIED' ? 'LOCATION_DENIED' : err.message)
+        setStep('error')
+      })
   }
 
   const handleClose = () => { stopStream(); onClose() }
-
-  // Estimasi ukuran file
-  const fileSizeKB = captured ? Math.round((captured.length * 3/4) / 1024) : 0
+  const fileSizeKB  = captured ? Math.round((captured.length * 3/4) / 1024) : 0
 
   return (
-    <div style={{ position:'fixed',inset:0,zIndex:60,display:'flex',alignItems:'flex-end',background:'rgba(0,0,0,0.7)' }}>
-      <div style={{ width:'100%',background:'white',borderRadius:'24px 24px 0 0',padding:20 }}>
+    <div style={{ position:'fixed',inset:0,zIndex:60,display:'flex',alignItems:'flex-end',background:'rgba(0,0,0,0.75)' }}>
+      <div style={{ width:'100%',background:'white',borderRadius:'24px 24px 0 0',padding:20,maxHeight:'90vh',overflowY:'auto' }}>
         <div style={{ display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16 }}>
           <h2 style={{ fontWeight:700,margin:0,fontSize:16 }}>📷 {mode==='in'?'Clock In':'Clock Out'} Selfie</h2>
           <button onClick={handleClose} style={{ background:'none',border:'none',fontSize:22,cursor:'pointer',color:'#aaa' }}>×</button>
         </div>
 
-        {err
-          ? <div style={{ textAlign:'center',padding:32 }}>
-              <p style={{ color:'#E53935',marginBottom:8 }}>{err}</p>
-              <p style={{ fontSize:12,color:'#aaa',marginBottom:16 }}>Pastikan browser memiliki izin kamera</p>
-              <button onClick={handleClose} style={{ color:'#888',fontSize:13,background:'none',border:'none',cursor:'pointer' }}>Tutup</button>
+        {/* ── LOKASI DITOLAK ── */}
+        {step==='error' && errMsg==='LOCATION_DENIED' && (
+          <div style={{ textAlign:'center',padding:'24px 8px' }}>
+            <div style={{ fontSize:52,marginBottom:12 }}>📍</div>
+            <h3 style={{ fontWeight:800,fontSize:16,margin:'0 0 8px',color:'#C62828' }}>Izin Lokasi Diperlukan</h3>
+            <p style={{ fontSize:13,color:'#555',marginBottom:8,lineHeight:1.6 }}>
+              Absensi <strong>wajib</strong> menyertakan lokasi. Aktifkan izin lokasi di browser kamu:
+            </p>
+            <div style={{ background:'#FFF8E1',borderRadius:12,padding:14,marginBottom:20,textAlign:'left' }}>
+              <p style={{ fontSize:12,fontWeight:700,color:'#F57F17',margin:'0 0 6px' }}>Cara mengaktifkan:</p>
+              <p style={{ fontSize:12,color:'#666',margin:'0 0 4px' }}>Chrome: 🔒 di address bar → Lokasi → Izinkan</p>
+              <p style={{ fontSize:12,color:'#666',margin:'0 0 4px' }}>Safari: Pengaturan → Privasi → Layanan Lokasi</p>
+              <p style={{ fontSize:12,color:'#666',margin:0 }}>Lalu muat ulang halaman ini</p>
             </div>
-          : <>
-              {/* Lokasi bar */}
-              <div style={{ display:'flex',alignItems:'center',gap:8,padding:'8px 12px',background:'#F0FFF4',borderRadius:10,marginBottom:12,border:'1px solid #C8E6C9' }}>
-                <span style={{ fontSize:14 }}>📍</span>
-                <span style={{ fontSize:12,color:'#2E7D32',fontWeight:600,flex:1 }}>
-                  {loadingLoc ? 'Mengambil lokasi...' : (location?.label || 'Lokasi tidak tersedia')}
-                </span>
-                {loadingLoc && <span style={{ fontSize:11,color:'#aaa' }}>⟳</span>}
-              </div>
+            <BtnGrad onClick={()=>window.location.reload()}>🔄 Muat Ulang Halaman</BtnGrad>
+            <button onClick={handleClose} style={{ display:'block',margin:'12px auto 0',color:'#aaa',fontSize:13,background:'none',border:'none',cursor:'pointer' }}>Tutup</button>
+          </div>
+        )}
 
-              <div style={{ borderRadius:16,overflow:'hidden',background:'#000',marginBottom:12,height:240,position:'relative' }}>
-                {!captured
-                  ? <video ref={videoRef} autoPlay playsInline muted style={{ width:'100%',height:'100%',objectFit:'cover' }}/>
-                  : <img src={captured} alt="preview" style={{ width:'100%',height:'100%',objectFit:'cover' }}/>
-                }
-                <canvas ref={canvasRef} style={{ display:'none' }}/>
-                {!streaming && !captured && !err && (
-                  <div style={{ position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center',color:'white',fontSize:13 }}>Memuat kamera...</div>
-                )}
-                {compressing && (
-                  <div style={{ position:'absolute',inset:0,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',background:'rgba(0,0,0,0.6)',color:'white',gap:8 }}>
-                    <span style={{ fontSize:20 }}>⚙️</span>
-                    <span style={{ fontSize:13 }}>Mengompres foto...</span>
-                  </div>
-                )}
-                {/* Overlay info setelah foto */}
-                {captured && (
-                  <div style={{ position:'absolute',bottom:8,left:8,right:8,background:'rgba(0,0,0,0.55)',borderRadius:8,padding:'6px 10px',display:'flex',alignItems:'center',gap:6 }}>
-                    <span style={{ fontSize:11,color:'#aaa' }}>📦</span>
-                    <span style={{ fontSize:11,color:'white' }}>{fileSizeKB} KB</span>
-                    <span style={{ fontSize:11,color:'#aaa',marginLeft:4 }}>·</span>
-                    <span style={{ fontSize:11,color:'#69F0AE' }}>✓ Terkompresi</span>
-                  </div>
-                )}
-              </div>
+        {/* ── ERROR LAIN ── */}
+        {step==='error' && errMsg!=='LOCATION_DENIED' && (
+          <div style={{ textAlign:'center',padding:'24px 8px' }}>
+            <div style={{ fontSize:48,marginBottom:12 }}>⚠️</div>
+            <p style={{ color:'#E53935',fontWeight:700,marginBottom:8 }}>{errMsg}</p>
+            <BtnGrad onClick={handleUlang}>Coba Lagi</BtnGrad>
+            <button onClick={handleClose} style={{ display:'block',margin:'12px auto 0',color:'#aaa',fontSize:13,background:'none',border:'none',cursor:'pointer' }}>Tutup</button>
+          </div>
+        )}
 
-              {!captured
-                ? <BtnGrad onClick={capture} disabled={!streaming || compressing}>
-                    {compressing ? '⚙️ Mengompres...' : '📸 Ambil Foto'}
-                  </BtnGrad>
-                : <div style={{ display:'flex',flexDirection:'column',gap:8 }}>
-                    <BtnGrad color="green" onClick={handleConfirm}>
-                      ✅ Konfirmasi {mode==='in'?'Clock In':'Clock Out'}
-                    </BtnGrad>
-                    <button onClick={handleUlang} style={{ padding:12,background:'none',border:'none',color:'#888',fontSize:13,cursor:'pointer',fontWeight:600 }}>
-                      🔄 Ulangi Foto
-                    </button>
-                  </div>
-              }
-            </>
-        }
+        {/* ── LOADING LOKASI ── */}
+        {step==='requesting_location' && (
+          <div style={{ textAlign:'center',padding:'32px 8px' }}>
+            <div style={{ fontSize:48,marginBottom:16 }}>📍</div>
+            <p style={{ fontWeight:700,fontSize:15,margin:'0 0 8px' }}>Mengambil Lokasi...</p>
+            <p style={{ fontSize:12,color:'#aaa',marginBottom:20 }}>Pastikan kamu mengizinkan akses lokasi</p>
+            <div style={{ width:40,height:40,borderRadius:'50%',border:'4px solid #f0f0f0',borderTop:'4px solid #E53935',animation:'spin 0.8s linear infinite',margin:'0 auto' }}/>
+            <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+          </div>
+        )}
+
+        {/* ── LOADING KAMERA ── */}
+        {step==='requesting_camera' && (
+          <div style={{ textAlign:'center',padding:'32px 8px' }}>
+            {locDisplay && (
+              <div style={{ display:'flex',alignItems:'center',gap:8,padding:'10px 14px',background:'#E8F5E9',borderRadius:12,marginBottom:20,border:'1px solid #A5D6A7' }}>
+                <span style={{ fontSize:18 }}>📍</span>
+                <div style={{ textAlign:'left' }}>
+                  <p style={{ fontSize:11,color:'#2E7D32',fontWeight:700,margin:0 }}>Lokasi berhasil didapat ✓</p>
+                  <p style={{ fontSize:12,color:'#388E3C',margin:0 }}>{locDisplay.label}</p>
+                </div>
+              </div>
+            )}
+            <div style={{ width:40,height:40,borderRadius:'50%',border:'4px solid #f0f0f0',borderTop:'4px solid #F5A623',animation:'spin 0.8s linear infinite',margin:'0 auto 12px' }}/>
+            <p style={{ fontSize:13,color:'#aaa' }}>Membuka kamera...</p>
+          </div>
+        )}
+
+        {/* ── KAMERA SIAP / CAPTURED ── */}
+        {(step==='ready' || step==='captured') && (
+          <>
+            {/* Lokasi bar */}
+            {locDisplay && (
+              <div style={{ display:'flex',alignItems:'center',gap:8,padding:'8px 12px',background:'#E8F5E9',borderRadius:10,marginBottom:10,border:'1px solid #A5D6A7' }}>
+                <span style={{ fontSize:16 }}>📍</span>
+                <div style={{ flex:1 }}>
+                  <p style={{ fontSize:12,color:'#2E7D32',fontWeight:700,margin:0 }}>{locDisplay.label}</p>
+                  <p style={{ fontSize:10,color:'#81C784',margin:0,fontFamily:'monospace' }}>{locDisplay.coords}</p>
+                </div>
+                <span style={{ fontSize:11,color:'#43A047',fontWeight:700 }}>✓</span>
+              </div>
+            )}
+
+            {/* Video / preview */}
+            <div style={{ borderRadius:16,overflow:'hidden',background:'#000',marginBottom:12,height:250,position:'relative' }}>
+              <video ref={videoRef} autoPlay playsInline muted style={{ width:'100%',height:'100%',objectFit:'cover',display:step==='captured'?'none':'block' }}/>
+              {captured && <img src={captured} alt="preview" style={{ width:'100%',height:'100%',objectFit:'cover' }}/>}
+              <canvas ref={canvasRef} style={{ display:'none' }}/>
+              {compressing && (
+                <div style={{ position:'absolute',inset:0,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',background:'rgba(0,0,0,0.65)',color:'white',gap:8 }}>
+                  <span style={{ fontSize:24 }}>⚙️</span>
+                  <span style={{ fontSize:13 }}>Mengompres foto...</span>
+                </div>
+              )}
+              {step==='captured' && captured && (
+                <div style={{ position:'absolute',bottom:8,left:8,right:8,background:'rgba(0,0,0,0.6)',borderRadius:8,padding:'5px 10px',display:'flex',alignItems:'center',gap:8 }}>
+                  <span style={{ fontSize:11,color:'#69F0AE',fontWeight:700 }}>✓ Terkompresi</span>
+                  <span style={{ fontSize:11,color:'#aaa' }}>·</span>
+                  <span style={{ fontSize:11,color:'white' }}>{fileSizeKB} KB</span>
+                </div>
+              )}
+            </div>
+
+            {step==='ready' && (
+              <BtnGrad onClick={capture} disabled={!streaming || compressing}>
+                {compressing ? '⚙️ Mengompres...' : '📸 Ambil Foto'}
+              </BtnGrad>
+            )}
+            {step==='captured' && (
+              <div style={{ display:'flex',flexDirection:'column',gap:8 }}>
+                <BtnGrad color="green" onClick={handleConfirm}>
+                  ✅ Konfirmasi {mode==='in' ? 'Clock In' : 'Clock Out'}
+                </BtnGrad>
+                <button onClick={handleUlang} style={{ padding:12,background:'none',border:'none',color:'#888',fontSize:13,cursor:'pointer',fontWeight:600 }}>
+                  🔄 Ulangi Foto
+                </button>
+              </div>
+            )}
+          </>
+        )}
       </div>
     </div>
   )
