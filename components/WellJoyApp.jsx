@@ -134,17 +134,66 @@ const NotifPanel = ({ nip, onClose, notifications=[], onMarkRead, onMarkAllRead,
   )
 }
 
+// ─── COMPRESS IMAGE ───────────────────────────────────────────────────────────
+const compressImage = (dataUrl, maxWidth=800, quality=0.6) => {
+  return new Promise(resolve => {
+    const img = new Image()
+    img.onload = () => {
+      const canvas = document.createElement('canvas')
+      let w = img.width, h = img.height
+      if (w > maxWidth) { h = Math.round(h * maxWidth / w); w = maxWidth }
+      canvas.width = w; canvas.height = h
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h)
+      resolve(canvas.toDataURL('image/jpeg', quality))
+    }
+    img.src = dataUrl
+  })
+}
+
+// ─── GET LOCATION ─────────────────────────────────────────────────────────────
+const getLocation = () => new Promise((resolve) => {
+  if (!navigator.geolocation) { resolve({ coords: null, label: 'Lokasi tidak tersedia' }); return }
+  navigator.geolocation.getCurrentPosition(
+    async (pos) => {
+      const { latitude: lat, longitude: lng } = pos.coords
+      let label = `${lat.toFixed(5)}, ${lng.toFixed(5)}`
+      try {
+        const res = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`)
+        const data = await res.json()
+        const addr = data.address
+        // Ambil nama lokasi yang paling relevan
+        const parts = [
+          addr.road || addr.pedestrian || addr.footway,
+          addr.suburb || addr.neighbourhood || addr.village,
+          addr.city || addr.town || addr.county,
+        ].filter(Boolean)
+        if (parts.length > 0) label = parts.slice(0,2).join(', ')
+      } catch { /* fallback ke koordinat */ }
+      resolve({ coords: `${lat.toFixed(6)},${lng.toFixed(6)}`, label })
+    },
+    () => resolve({ coords: null, label: 'Izin lokasi ditolak' }),
+    { enableHighAccuracy: true, timeout: 8000 }
+  )
+})
+
+// ─── CAMERA MODAL ─────────────────────────────────────────────────────────────
 const CameraModal = ({ mode, onCapture, onClose }) => {
   const videoRef = useRef(null)
   const canvasRef = useRef(null)
   const streamRef = useRef(null)
   const [streaming, setStreaming] = useState(false)
   const [captured, setCaptured] = useState(null)
+  const [location, setLocation] = useState(null)
+  const [loadingLoc, setLoadingLoc] = useState(false)
+  const [compressing, setCompressing] = useState(false)
   const [err, setErr] = useState('')
 
   useEffect(()=>{
     let active = true
-    navigator.mediaDevices?.getUserMedia({ video:{facingMode:'user'}, audio:false })
+    // Mulai ambil lokasi bersamaan dengan kamera
+    setLoadingLoc(true)
+    getLocation().then(loc => { if(active) { setLocation(loc); setLoadingLoc(false) } })
+    navigator.mediaDevices?.getUserMedia({ video:{ facingMode:'user', width:{ideal:1280}, height:{ideal:720} }, audio:false })
       .then(s=>{
         streamRef.current = s
         if(active && videoRef.current){ videoRef.current.srcObject=s; setStreaming(true) }
@@ -158,28 +207,38 @@ const CameraModal = ({ mode, onCapture, onClose }) => {
 
   const stopStream = () => streamRef.current?.getTracks().forEach(t=>t.stop())
 
-  const capture = () => {
+  const capture = async () => {
     const c=canvasRef.current, v=videoRef.current
     if(!c||!v) return
     c.width=v.videoWidth; c.height=v.videoHeight
     c.getContext('2d').drawImage(v,0,0)
-    setCaptured(c.toDataURL('image/jpeg',0.85))
+    setCompressing(true)
+    const raw = c.toDataURL('image/jpeg', 1)
+    const compressed = await compressImage(raw, 800, 0.6)
+    setCaptured(compressed)
+    setCompressing(false)
     stopStream()
   }
 
   const handleConfirm = () => {
-    onCapture(captured)
+    onCapture(captured, location)
     onClose()
   }
 
   const handleUlang = () => {
     setCaptured(null)
-    navigator.mediaDevices?.getUserMedia({ video:{facingMode:'user'}, audio:false })
+    setLocation(null)
+    setLoadingLoc(true)
+    getLocation().then(loc => { setLocation(loc); setLoadingLoc(false) })
+    navigator.mediaDevices?.getUserMedia({ video:{ facingMode:'user' }, audio:false })
       .then(s=>{ streamRef.current=s; if(videoRef.current){ videoRef.current.srcObject=s; setStreaming(true) } })
       .catch(()=>{})
   }
 
   const handleClose = () => { stopStream(); onClose() }
+
+  // Estimasi ukuran file
+  const fileSizeKB = captured ? Math.round((captured.length * 3/4) / 1024) : 0
 
   return (
     <div style={{ position:'fixed',inset:0,zIndex:60,display:'flex',alignItems:'flex-end',background:'rgba(0,0,0,0.7)' }}>
@@ -188,6 +247,7 @@ const CameraModal = ({ mode, onCapture, onClose }) => {
           <h2 style={{ fontWeight:700,margin:0,fontSize:16 }}>📷 {mode==='in'?'Clock In':'Clock Out'} Selfie</h2>
           <button onClick={handleClose} style={{ background:'none',border:'none',fontSize:22,cursor:'pointer',color:'#aaa' }}>×</button>
         </div>
+
         {err
           ? <div style={{ textAlign:'center',padding:32 }}>
               <p style={{ color:'#E53935',marginBottom:8 }}>{err}</p>
@@ -195,7 +255,16 @@ const CameraModal = ({ mode, onCapture, onClose }) => {
               <button onClick={handleClose} style={{ color:'#888',fontSize:13,background:'none',border:'none',cursor:'pointer' }}>Tutup</button>
             </div>
           : <>
-              <div style={{ borderRadius:16,overflow:'hidden',background:'#000',marginBottom:16,height:260,position:'relative' }}>
+              {/* Lokasi bar */}
+              <div style={{ display:'flex',alignItems:'center',gap:8,padding:'8px 12px',background:'#F0FFF4',borderRadius:10,marginBottom:12,border:'1px solid #C8E6C9' }}>
+                <span style={{ fontSize:14 }}>📍</span>
+                <span style={{ fontSize:12,color:'#2E7D32',fontWeight:600,flex:1 }}>
+                  {loadingLoc ? 'Mengambil lokasi...' : (location?.label || 'Lokasi tidak tersedia')}
+                </span>
+                {loadingLoc && <span style={{ fontSize:11,color:'#aaa' }}>⟳</span>}
+              </div>
+
+              <div style={{ borderRadius:16,overflow:'hidden',background:'#000',marginBottom:12,height:240,position:'relative' }}>
                 {!captured
                   ? <video ref={videoRef} autoPlay playsInline muted style={{ width:'100%',height:'100%',objectFit:'cover' }}/>
                   : <img src={captured} alt="preview" style={{ width:'100%',height:'100%',objectFit:'cover' }}/>
@@ -204,12 +273,34 @@ const CameraModal = ({ mode, onCapture, onClose }) => {
                 {!streaming && !captured && !err && (
                   <div style={{ position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center',color:'white',fontSize:13 }}>Memuat kamera...</div>
                 )}
+                {compressing && (
+                  <div style={{ position:'absolute',inset:0,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',background:'rgba(0,0,0,0.6)',color:'white',gap:8 }}>
+                    <span style={{ fontSize:20 }}>⚙️</span>
+                    <span style={{ fontSize:13 }}>Mengompres foto...</span>
+                  </div>
+                )}
+                {/* Overlay info setelah foto */}
+                {captured && (
+                  <div style={{ position:'absolute',bottom:8,left:8,right:8,background:'rgba(0,0,0,0.55)',borderRadius:8,padding:'6px 10px',display:'flex',alignItems:'center',gap:6 }}>
+                    <span style={{ fontSize:11,color:'#aaa' }}>📦</span>
+                    <span style={{ fontSize:11,color:'white' }}>{fileSizeKB} KB</span>
+                    <span style={{ fontSize:11,color:'#aaa',marginLeft:4 }}>·</span>
+                    <span style={{ fontSize:11,color:'#69F0AE' }}>✓ Terkompresi</span>
+                  </div>
+                )}
               </div>
+
               {!captured
-                ? <BtnGrad onClick={capture} disabled={!streaming}>📸 Ambil Foto</BtnGrad>
+                ? <BtnGrad onClick={capture} disabled={!streaming || compressing}>
+                    {compressing ? '⚙️ Mengompres...' : '📸 Ambil Foto'}
+                  </BtnGrad>
                 : <div style={{ display:'flex',flexDirection:'column',gap:8 }}>
-                    <BtnGrad color="green" onClick={handleConfirm}>✅ Konfirmasi {mode==='in'?'Clock In':'Clock Out'}</BtnGrad>
-                    <button onClick={handleUlang} style={{ padding:12,background:'none',border:'none',color:'#888',fontSize:13,cursor:'pointer',fontWeight:600 }}>🔄 Ulangi Foto</button>
+                    <BtnGrad color="green" onClick={handleConfirm}>
+                      ✅ Konfirmasi {mode==='in'?'Clock In':'Clock Out'}
+                    </BtnGrad>
+                    <button onClick={handleUlang} style={{ padding:12,background:'none',border:'none',color:'#888',fontSize:13,cursor:'pointer',fontWeight:600 }}>
+                      🔄 Ulangi Foto
+                    </button>
                   </div>
               }
             </>
@@ -239,23 +330,28 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
   const myAtt = dbData.attendance.filter(a=>a.nip===user.nip).slice(0,3)
   const emp = dbData.karyawan.find(k=>k.nip===user.nip)||user
 
-  const handleClockIn = async (foto) => {
+  const handleClockIn = async (foto, loc) => {
     setLoading(true)
     const nowT = new Date()
     const jamStr = nowT.toTimeString().slice(0,5)
     const menit = nowT.getHours()>8||(nowT.getHours()===8&&nowT.getMinutes()>0)?Math.max(0,(nowT.getHours()-8)*60+nowT.getMinutes()):0
     const status = menit>0?'TERLAMBAT':'HADIR'
+    const lokasiLabel = loc?.label || 'Tidak diketahui'
+    const lokasiCoords = loc?.coords || null
     const { error } = await supabase.from('attendance').insert({
-      nip:user.nip,nama:user.nama,tanggal:today,jam_masuk:jamStr,
-      status_kehadiran:status,menit_terlambat:menit,
-      lokasi_masuk:'Kantor',foto_masuk:foto,status_validasi:'MENUNGGU'
+      nip:user.nip, nama:user.nama, tanggal:today, jam_masuk:jamStr,
+      status_kehadiran:status, menit_terlambat:menit,
+      lokasi_masuk:lokasiLabel, koordinat_masuk:lokasiCoords,
+      foto_masuk:foto, status_validasi:'MENUNGGU'
     })
-    if(!error){ await supabase.from('audit_log').insert({ user_name:user.nama,nip:user.nip,aktivitas:'Clock In',keterangan:'Selfie berhasil' }); showToast('✅ Clock In berhasil!'); refreshData() }
-    else showToast('❌ Gagal clock in')
+    if(!error){
+      await supabase.from('audit_log').insert({ user_name:user.nama, nip:user.nip, aktivitas:'Clock In', keterangan:`${jamStr} · ${lokasiLabel}` })
+      showToast('✅ Clock In berhasil!'); refreshData()
+    } else showToast('❌ Gagal clock in')
     setLoading(false)
   }
 
-  const handleClockOut = async (foto) => {
+  const handleClockOut = async (foto, loc) => {
     if(!todayAtt) return
     setLoading(true)
     const nowT = new Date()
@@ -263,12 +359,17 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
     const masuk = new Date(`${today}T${todayAtt.jam_masuk}`)
     const durMenit = Math.round((nowT-masuk)/60000)
     const lemburJam = Math.max(0,(durMenit-540)/60)
+    const lokasiLabel = loc?.label || 'Tidak diketahui'
+    const lokasiCoords = loc?.coords || null
     const { error } = await supabase.from('attendance').update({
-      jam_keluar:jamStr,durasi:`${Math.floor(durMenit/60)}j ${durMenit%60}m`,
-      jam_lembur:Math.round(lemburJam*100)/100,foto_keluar:foto
+      jam_keluar:jamStr, durasi:`${Math.floor(durMenit/60)}j ${durMenit%60}m`,
+      jam_lembur:Math.round(lemburJam*100)/100,
+      foto_keluar:foto, lokasi_keluar:lokasiLabel, koordinat_keluar:lokasiCoords
     }).eq('id',todayAtt.id)
-    if(!error){ await supabase.from('audit_log').insert({ user_name:user.nama,nip:user.nip,aktivitas:'Clock Out',keterangan:'Selfie berhasil' }); showToast('✅ Clock Out berhasil!'); refreshData() }
-    else showToast('❌ Gagal clock out')
+    if(!error){
+      await supabase.from('audit_log').insert({ user_name:user.nama, nip:user.nip, aktivitas:'Clock Out', keterangan:`${jamStr} · ${lokasiLabel}` })
+      showToast('✅ Clock Out berhasil!'); refreshData()
+    } else showToast('❌ Gagal clock out')
     setLoading(false)
   }
 
@@ -952,20 +1053,48 @@ const HRDAbsensi = ({ user, showToast, dbData, refreshData }) => {
                     <Chip status={a.status_kehadiran}/>
                   </div>
                   <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:10 }}>
+                    {/* Clock In */}
                     <div style={{ background:'#F0FFF4',borderRadius:12,padding:12 }}>
                       <p style={{ fontSize:11,color:'#aaa',margin:'0 0 4px',fontWeight:600 }}>🟢 Clock In</p>
                       <p style={{ fontSize:13,fontWeight:700,color:'#2E7D32',margin:0 }}>{a.jam_masuk?`${formatTgl(a.tanggal)} ${a.jam_masuk}`:'-'}</p>
+                      {a.lokasi_masuk && (
+                        <div style={{ display:'flex',alignItems:'flex-start',gap:4,marginTop:4 }}>
+                          <span style={{ fontSize:10,flexShrink:0,marginTop:1 }}>📍</span>
+                          <span style={{ fontSize:10,color:'#388E3C',lineHeight:1.3 }}>{a.lokasi_masuk}</span>
+                        </div>
+                      )}
+                      {a.koordinat_masuk && (
+                        <a href={`https://www.google.com/maps?q=${a.koordinat_masuk}`} target="_blank" rel="noreferrer"
+                          style={{ display:'inline-flex',alignItems:'center',gap:4,marginTop:6,fontSize:10,color:'#1565C0',fontWeight:600,textDecoration:'none',background:'#E3F2FD',padding:'3px 8px',borderRadius:6 }}>
+                          🗺️ Lihat Maps
+                        </a>
+                      )}
                       {a.foto_masuk
-                        ? <button onClick={()=>setFotoModal({url:a.foto_masuk,label:'Foto Clock In'})} style={{ marginTop:8,display:'flex',alignItems:'center',gap:6,background:'none',border:'1px solid #C8E6C9',borderRadius:8,padding:'4px 10px',cursor:'pointer',fontSize:11,color:'#2E7D32',fontWeight:600 }}>
+                        ? <button onClick={()=>setFotoModal({url:a.foto_masuk,label:'Foto Clock In',lokasi:a.lokasi_masuk,coords:a.koordinat_masuk})}
+                            style={{ marginTop:6,display:'flex',alignItems:'center',gap:6,background:'none',border:'1px solid #C8E6C9',borderRadius:8,padding:'4px 10px',cursor:'pointer',fontSize:11,color:'#2E7D32',fontWeight:600 }}>
                             <img src={a.foto_masuk} alt="" style={{ width:28,height:28,borderRadius:6,objectFit:'cover' }}/>Lihat Foto
                           </button>
                         : <p style={{ fontSize:11,color:'#ccc',marginTop:6 }}>Tidak ada foto</p>}
                     </div>
+                    {/* Clock Out */}
                     <div style={{ background:'#FFF5F5',borderRadius:12,padding:12 }}>
                       <p style={{ fontSize:11,color:'#aaa',margin:'0 0 4px',fontWeight:600 }}>🔴 Clock Out</p>
                       <p style={{ fontSize:13,fontWeight:700,color:a.jam_keluar?'#C62828':'#aaa',margin:0 }}>{a.jam_keluar?`${formatTgl(a.tanggal)} ${a.jam_keluar}`:'Belum clock out'}</p>
+                      {a.lokasi_keluar && (
+                        <div style={{ display:'flex',alignItems:'flex-start',gap:4,marginTop:4 }}>
+                          <span style={{ fontSize:10,flexShrink:0,marginTop:1 }}>📍</span>
+                          <span style={{ fontSize:10,color:'#C62828',lineHeight:1.3 }}>{a.lokasi_keluar}</span>
+                        </div>
+                      )}
+                      {a.koordinat_keluar && (
+                        <a href={`https://www.google.com/maps?q=${a.koordinat_keluar}`} target="_blank" rel="noreferrer"
+                          style={{ display:'inline-flex',alignItems:'center',gap:4,marginTop:6,fontSize:10,color:'#1565C0',fontWeight:600,textDecoration:'none',background:'#E3F2FD',padding:'3px 8px',borderRadius:6 }}>
+                          🗺️ Lihat Maps
+                        </a>
+                      )}
                       {a.foto_keluar
-                        ? <button onClick={()=>setFotoModal({url:a.foto_keluar,label:'Foto Clock Out'})} style={{ marginTop:8,display:'flex',alignItems:'center',gap:6,background:'none',border:'1px solid #FFCDD2',borderRadius:8,padding:'4px 10px',cursor:'pointer',fontSize:11,color:'#C62828',fontWeight:600 }}>
+                        ? <button onClick={()=>setFotoModal({url:a.foto_keluar,label:'Foto Clock Out',lokasi:a.lokasi_keluar,coords:a.koordinat_keluar})}
+                            style={{ marginTop:6,display:'flex',alignItems:'center',gap:6,background:'none',border:'1px solid #FFCDD2',borderRadius:8,padding:'4px 10px',cursor:'pointer',fontSize:11,color:'#C62828',fontWeight:600 }}>
                             <img src={a.foto_keluar} alt="" style={{ width:28,height:28,borderRadius:6,objectFit:'cover' }}/>Lihat Foto
                           </button>
                         : <p style={{ fontSize:11,color:'#ccc',marginTop:6 }}>Tidak ada foto</p>}
@@ -979,7 +1108,22 @@ const HRDAbsensi = ({ user, showToast, dbData, refreshData }) => {
       </div>
       {fotoModal && (
         <Modal title={fotoModal.label} onClose={()=>setFotoModal(null)}>
-          <img src={fotoModal.url} alt={fotoModal.label} style={{ width:'100%',borderRadius:14,objectFit:'cover',maxHeight:320 }}/>
+          <img src={fotoModal.url} alt={fotoModal.label} style={{ width:'100%',borderRadius:14,objectFit:'cover',maxHeight:300 }}/>
+          {fotoModal.lokasi && (
+            <div style={{ marginTop:10,padding:'10px 14px',background:'#F0FFF4',borderRadius:12,border:'1px solid #C8E6C9' }}>
+              <div style={{ display:'flex',alignItems:'flex-start',gap:6,marginBottom:fotoModal.coords?8:0 }}>
+                <span style={{ fontSize:14,flexShrink:0 }}>📍</span>
+                <span style={{ fontSize:13,color:'#2E7D32',fontWeight:600 }}>{fotoModal.lokasi}</span>
+              </div>
+              {fotoModal.coords && (
+                <div style={{ display:'flex',gap:8 }}>
+                  <span style={{ fontSize:11,color:'#aaa',fontFamily:'monospace' }}>{fotoModal.coords}</span>
+                  <a href={`https://www.google.com/maps?q=${fotoModal.coords}`} target="_blank" rel="noreferrer"
+                    style={{ fontSize:11,color:'#1565C0',fontWeight:700,textDecoration:'none' }}>🗺️ Buka Maps</a>
+                </div>
+              )}
+            </div>
+          )}
           <div style={{ marginTop:12 }}><BtnGrad onClick={()=>setFotoModal(null)}>Tutup</BtnGrad></div>
         </Modal>
       )}
