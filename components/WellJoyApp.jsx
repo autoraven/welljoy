@@ -203,7 +203,10 @@ const CameraModal = ({ mode, onCapture, onClose }) => {
     navigator.mediaDevices.getUserMedia({ video:{ facingMode:'user', width:{ideal:1280} }, audio:false })
       .then(stream => {
         streamRef.current = stream
-        if (videoRef.current) videoRef.current.srcObject = stream
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream
+          videoRef.current.play().catch(() => {})
+        }
         setStreaming(true)
         setStep('ready')
       })
@@ -344,24 +347,41 @@ const CameraModal = ({ mode, onCapture, onClose }) => {
             )}
 
             {/* Video / preview */}
-            <div style={{ borderRadius:16,overflow:'hidden',background:'#000',marginBottom:12,height:250,position:'relative' }}>
-              <video ref={videoRef} autoPlay playsInline muted style={{ width:'100%',height:'100%',objectFit:'cover',display:step==='captured'?'none':'block' }}/>
-              {captured && <img src={captured} alt="preview" style={{ width:'100%',height:'100%',objectFit:'cover' }}/>}
-              <canvas ref={canvasRef} style={{ display:'none' }}/>
-              {compressing && (
-                <div style={{ position:'absolute',inset:0,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',background:'rgba(0,0,0,0.65)',color:'white',gap:8 }}>
-                  <span style={{ fontSize:24 }}>⚙️</span>
-                  <span style={{ fontSize:13 }}>Mengompres foto...</span>
-                </div>
-              )}
-              {step==='captured' && captured && (
-                <div style={{ position:'absolute',bottom:8,left:8,right:8,background:'rgba(0,0,0,0.6)',borderRadius:8,padding:'5px 10px',display:'flex',alignItems:'center',gap:8 }}>
-                  <span style={{ fontSize:11,color:'#69F0AE',fontWeight:700 }}>✓ Terkompresi</span>
-                  <span style={{ fontSize:11,color:'#aaa' }}>·</span>
-                  <span style={{ fontSize:11,color:'white' }}>{fileSizeKB} KB</span>
-                </div>
-              )}
-            </div>
+              <div style={{ borderRadius:16,overflow:'hidden',background:'#111',marginBottom:12,height:250,position:'relative' }}>
+                {/* Video selalu di-render agar ref tidak null, cukup sembunyikan saat sudah captured */}
+                <video
+                  ref={videoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  onLoadedMetadata={e => e.target.play()}
+                  style={{ width:'100%',height:'100%',objectFit:'cover',display:captured?'none':'block' }}
+                />
+                {captured && (
+                  <img src={captured} alt="preview" style={{ width:'100%',height:'100%',objectFit:'cover',position:'absolute',inset:0 }}/>
+                )}
+                <canvas ref={canvasRef} style={{ display:'none' }}/>
+                {!captured && !streaming && (
+                  <div style={{ position:'absolute',inset:0,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',color:'#aaa',gap:8 }}>
+                    <div style={{ width:32,height:32,borderRadius:'50%',border:'3px solid #444',borderTop:'3px solid #E53935',animation:'spin 0.8s linear infinite' }}/>
+                    <span style={{ fontSize:12 }}>Memuat kamera...</span>
+                    <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+                  </div>
+                )}
+                {compressing && (
+                  <div style={{ position:'absolute',inset:0,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',background:'rgba(0,0,0,0.65)',color:'white',gap:8 }}>
+                    <span style={{ fontSize:24 }}>⚙️</span>
+                    <span style={{ fontSize:13 }}>Mengompres foto...</span>
+                  </div>
+                )}
+                {captured && (
+                  <div style={{ position:'absolute',bottom:8,left:8,right:8,background:'rgba(0,0,0,0.6)',borderRadius:8,padding:'5px 10px',display:'flex',alignItems:'center',gap:8 }}>
+                    <span style={{ fontSize:11,color:'#69F0AE',fontWeight:700 }}>✓ Terkompresi</span>
+                    <span style={{ fontSize:11,color:'#aaa' }}>·</span>
+                    <span style={{ fontSize:11,color:'white' }}>{fileSizeKB} KB</span>
+                  </div>
+                )}
+              </div>
 
             {step==='ready' && (
               <BtnGrad onClick={capture} disabled={!streaming || compressing}>
