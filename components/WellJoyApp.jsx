@@ -520,7 +520,7 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
         <button onClick={onLogout} style={{ padding:14,borderRadius:14,color:'#E53935',fontWeight:700,fontSize:14,border:'2px solid #FFCDD2',background:'white',cursor:'pointer',marginTop:4,width:'100%' }}>← Keluar</button>
       </div>
 
-      {camera && <CameraModal mode={camera.mode} onCapture={foto=>{ camera.cb(foto); setCamera(null) }} onClose={()=>setCamera(null)}/>}
+      {camera && <CameraModal mode={camera.mode} onCapture={(foto, loc)=>{ camera.cb(foto, loc); setCamera(null) }} onClose={()=>setCamera(null)}/>}
 
       {showAnn && (
         <Modal title="Pengumuman HRD" onClose={()=>{ setShowAnn(false); setSelectedAnn(null) }}>
