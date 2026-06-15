@@ -420,46 +420,69 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
   const myAtt = dbData.attendance.filter(a=>a.nip===user.nip).slice(0,3)
   const emp = dbData.karyawan.find(k=>k.nip===user.nip)||user
 
+  // Upload base64 foto ke Supabase Storage, return public URL
+  const uploadFoto = async (base64, filename) => {
+    try {
+      // Convert base64 → Blob
+      const res   = await fetch(base64)
+      const blob  = await res.blob()
+      const path  = `absensi/${today}/${filename}`
+      const { error } = await supabase.storage
+        .from('foto-absensi')
+        .upload(path, blob, { contentType: 'image/jpeg', upsert: true })
+      if (error) { console.error('Upload error:', error); return base64 } // fallback base64
+      const { data } = supabase.storage.from('foto-absensi').getPublicUrl(path)
+      return data.publicUrl
+    } catch (e) {
+      console.error('uploadFoto error:', e)
+      return base64 // fallback
+    }
+  }
+
   const handleClockIn = async (foto, loc) => {
     setLoading(true)
+    showToast('⏳ Mengupload foto...')
     const nowT = new Date()
     const jamStr = nowT.toTimeString().slice(0,5)
     const menit = nowT.getHours()>8||(nowT.getHours()===8&&nowT.getMinutes()>0)?Math.max(0,(nowT.getHours()-8)*60+nowT.getMinutes()):0
     const status = menit>0?'TERLAMBAT':'HADIR'
-    const lokasiLabel = loc?.label || 'Tidak diketahui'
+    const lokasiLabel  = loc?.label  || 'Tidak diketahui'
     const lokasiCoords = loc?.coords || null
+    const fotoUrl = await uploadFoto(foto, `${user.nip}_masuk_${jamStr.replace(':','')}.jpg`)
     const { error } = await supabase.from('attendance').insert({
       nip:user.nip, nama:user.nama, tanggal:today, jam_masuk:jamStr,
       status_kehadiran:status, menit_terlambat:menit,
       lokasi_masuk:lokasiLabel, koordinat_masuk:lokasiCoords,
-      foto_masuk:foto, status_validasi:'MENUNGGU'
+      foto_masuk:fotoUrl, status_validasi:'MENUNGGU'
     })
-    if(!error){
+    if (!error) {
       await supabase.from('audit_log').insert({ user_name:user.nama, nip:user.nip, aktivitas:'Clock In', keterangan:`${jamStr} · ${lokasiLabel}` })
       showToast('✅ Clock In berhasil!'); refreshData()
-    } else showToast('❌ Gagal clock in')
+    } else { console.error(error); showToast('❌ Gagal clock in') }
     setLoading(false)
   }
 
   const handleClockOut = async (foto, loc) => {
-    if(!todayAtt) return
+    if (!todayAtt) return
     setLoading(true)
+    showToast('⏳ Mengupload foto...')
     const nowT = new Date()
     const jamStr = nowT.toTimeString().slice(0,5)
     const masuk = new Date(`${today}T${todayAtt.jam_masuk}`)
     const durMenit = Math.round((nowT-masuk)/60000)
     const lemburJam = Math.max(0,(durMenit-540)/60)
-    const lokasiLabel = loc?.label || 'Tidak diketahui'
+    const lokasiLabel  = loc?.label  || 'Tidak diketahui'
     const lokasiCoords = loc?.coords || null
+    const fotoUrl = await uploadFoto(foto, `${user.nip}_keluar_${jamStr.replace(':','')}.jpg`)
     const { error } = await supabase.from('attendance').update({
       jam_keluar:jamStr, durasi:`${Math.floor(durMenit/60)}j ${durMenit%60}m`,
       jam_lembur:Math.round(lemburJam*100)/100,
-      foto_keluar:foto, lokasi_keluar:lokasiLabel, koordinat_keluar:lokasiCoords
-    }).eq('id',todayAtt.id)
-    if(!error){
+      foto_keluar:fotoUrl, lokasi_keluar:lokasiLabel, koordinat_keluar:lokasiCoords
+    }).eq('id', todayAtt.id)
+    if (!error) {
       await supabase.from('audit_log').insert({ user_name:user.nama, nip:user.nip, aktivitas:'Clock Out', keterangan:`${jamStr} · ${lokasiLabel}` })
       showToast('✅ Clock Out berhasil!'); refreshData()
-    } else showToast('❌ Gagal clock out')
+    } else { console.error(error); showToast('❌ Gagal clock out') }
     setLoading(false)
   }
 
