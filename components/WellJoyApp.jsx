@@ -252,42 +252,30 @@ const CameraModal = ({ mode, onCapture, onClose }) => {
     console.log('[capture] readyState:', vid.readyState, 'size:', w, 'x', h)
 
     if (!w || !h || vid.readyState < 2) {
-      // Video belum siap — tunggu sebentar lalu coba lagi
-      console.warn('[capture] video belum siap, retry 300ms...')
-      setTimeout(() => capture(), 300)
+      console.warn('[capture] video belum siap, retry...')
+      setTimeout(() => capture(), 400)
       return
     }
 
+    // 1. Draw dulu SEBELUM stop stream
     cvs.width = w
     cvs.height = h
-    const ctx = cvs.getContext('2d')
-    ctx.drawImage(vid, 0, 0, w, h)
+    cvs.getContext('2d').drawImage(vid, 0, 0, w, h)
 
-    // Cek apakah canvas benar-benar ada isinya (pixel pertama tidak hitam)
-    const pixel = ctx.getImageData(0, 0, 1, 1).data
-    console.log('[capture] pixel[0,0] rgba:', pixel[0], pixel[1], pixel[2], pixel[3])
-    if (pixel[3] === 0 || (pixel[0] === 0 && pixel[1] === 0 && pixel[2] === 0)) {
-      console.warn('[capture] canvas masih hitam, retry 300ms...')
-      setTimeout(() => capture(), 300)
-      return
-    }
+    // 2. Stop stream SETELAH draw
+    stopStream()
 
+    // 3. Compress
     setCompressing(true)
     try {
       const result = compressCanvas(cvs, 800, 0.75)
       const sizeKB = Math.round(result.length * 3/4 / 1024)
-      console.log('[capture] sukses, size:', sizeKB, 'KB')
-      if (sizeKB < 5) {
-        console.warn('[capture] ukuran terlalu kecil, kemungkinan canvas kosong')
-      }
+      console.log('[capture] sukses, size:', sizeKB, 'KB, dims:', w, 'x', h)
       setCaptured(result)
-      stopStream()
       setPhase('captured')
     } catch(e) {
       console.error('[capture] error:', e)
-      const raw = cvs.toDataURL('image/jpeg', 0.7)
-      setCaptured(raw)
-      stopStream()
+      setCaptured(cvs.toDataURL('image/jpeg', 0.7))
       setPhase('captured')
     } finally {
       setCompressing(false)
@@ -333,8 +321,8 @@ const CameraModal = ({ mode, onCapture, onClose }) => {
             </div>
           )}
 
-          <div style={{ borderRadius:16,overflow:'hidden',background:'#000',marginBottom:12,position:'relative',aspectRatio:'4/3' }}>
-            {/* Video SELALU di-render — tidak conditional */}
+          <div style={{ borderRadius:16,overflow:'hidden',background:'#000',marginBottom:12,position:'relative',height:260 }}>
+            {/* Video live */}
             <video
               ref={videoRef}
               autoPlay
@@ -342,12 +330,12 @@ const CameraModal = ({ mode, onCapture, onClose }) => {
               muted
               style={{ width:'100%',height:'100%',objectFit:'cover',display: phase==='captured' ? 'none' : 'block' }}
             />
+            {/* Canvas OFF-SCREEN tapi tetap di DOM, bukan display:none agar drawImage bekerja */}
+            <canvas ref={canvasRef} style={{ position:'absolute',left:'-9999px',top:0,visibility:'hidden' }}/>
             {/* Preview foto setelah capture */}
-            {captured && (
+            {captured && phase==='captured' && (
               <img src={captured} alt="preview" style={{ position:'absolute',inset:0,width:'100%',height:'100%',objectFit:'cover' }}/>
             )}
-            <canvas ref={canvasRef} style={{ display:'none' }}/>
-
             {/* Loading kamera */}
             {phase==='cam' && (
               <div style={{ position:'absolute',inset:0,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',background:'rgba(0,0,0,0.7)',color:'white',gap:10 }}>
@@ -360,13 +348,13 @@ const CameraModal = ({ mode, onCapture, onClose }) => {
             {compressing && (
               <div style={{ position:'absolute',inset:0,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',background:'rgba(0,0,0,0.7)',color:'white',gap:8 }}>
                 <div style={{ width:36,height:36,borderRadius:'50%',border:'3px solid #555',borderTop:'3px solid #43A047',animation:'spin 0.8s linear infinite' }}/>
-                <span style={{ fontSize:13 }}>Mengompres foto...</span>
+                <span style={{ fontSize:13 }}>Memproses foto...</span>
               </div>
             )}
             {/* Info ukuran file */}
             {phase==='captured' && captured && !compressing && (
               <div style={{ position:'absolute',bottom:8,left:8,right:8,background:'rgba(0,0,0,0.6)',borderRadius:8,padding:'5px 10px',display:'flex',alignItems:'center',gap:8 }}>
-                <span style={{ fontSize:11,color:'#69F0AE',fontWeight:700 }}>✓ Terkompresi</span>
+                <span style={{ fontSize:11,color:'#69F0AE',fontWeight:700 }}>✓ OK</span>
                 <span style={{ fontSize:11,color:'#aaa' }}>·</span>
                 <span style={{ fontSize:11,color:'white' }}>{fileSizeKB} KB</span>
               </div>
