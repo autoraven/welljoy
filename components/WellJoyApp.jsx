@@ -423,19 +423,33 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
   // Upload base64 foto ke Supabase Storage, return public URL
   const uploadFoto = async (base64, filename) => {
     try {
+      if (!base64 || !base64.startsWith('data:image')) {
+        console.error('Invalid base64 foto')
+        return null
+      }
+      // Pastikan base64 punya data
+      const parts = base64.split(',')
+      if (!parts[1] || parts[1].length < 100) {
+        console.error('Base64 foto kosong atau terlalu kecil')
+        return null
+      }
       // Convert base64 → Blob
-      const res   = await fetch(base64)
-      const blob  = await res.blob()
-      const path  = `absensi/${today}/${filename}`
+      const byteStr = atob(parts[1])
+      const ab = new ArrayBuffer(byteStr.length)
+      const ia = new Uint8Array(ab)
+      for (let i = 0; i < byteStr.length; i++) ia[i] = byteStr.charCodeAt(i)
+      const blob = new Blob([ab], { type: 'image/jpeg' })
+
+      const path = `absensi/${today}/${filename}`
       const { error } = await supabase.storage
         .from('foto-absensi')
         .upload(path, blob, { contentType: 'image/jpeg', upsert: true })
-      if (error) { console.error('Upload error:', error); return base64 } // fallback base64
+      if (error) { console.error('Upload error:', error); return null }
       const { data } = supabase.storage.from('foto-absensi').getPublicUrl(path)
       return data.publicUrl
     } catch (e) {
       console.error('uploadFoto error:', e)
-      return base64 // fallback
+      return null
     }
   }
 
@@ -444,8 +458,13 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
     showToast('⏳ Mengupload foto...')
     const nowT = new Date()
     const jamStr = nowT.toTimeString().slice(0,5)
-    const menit = nowT.getHours()>8||(nowT.getHours()===8&&nowT.getMinutes()>0)?Math.max(0,(nowT.getHours()-8)*60+nowT.getMinutes()):0
-    const status = menit>0?'TERLAMBAT':'HADIR'
+    // Gunakan jam_masuk_wajib dari data karyawan, default 08:00
+    const jamWajib = emp.jam_masuk_wajib || '08:00'
+    const [wajibH, wajibM] = jamWajib.split(':').map(Number)
+    const wajibMenit = wajibH * 60 + wajibM
+    const nowMenit = nowT.getHours() * 60 + nowT.getMinutes()
+    const menit = Math.max(0, nowMenit - wajibMenit)
+    const status = menit > 0 ? 'TERLAMBAT' : 'HADIR'
     const lokasiLabel  = loc?.label  || 'Tidak diketahui'
     const lokasiCoords = loc?.coords || null
     const fotoUrl = await uploadFoto(foto, `${user.nip}_masuk_${jamStr.replace(':','')}.jpg`)
@@ -469,8 +488,8 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
     const nowT = new Date()
     const jamStr = nowT.toTimeString().slice(0,5)
     const masuk = new Date(`${today}T${todayAtt.jam_masuk}`)
-    const durMenit = Math.round((nowT-masuk)/60000)
-    const lemburJam = Math.max(0,(durMenit-540)/60)
+    const durMenit = Math.round((nowT - masuk) / 60000)
+    const lemburJam = Math.max(0, (durMenit - 540) / 60)
     const lokasiLabel  = loc?.label  || 'Tidak diketahui'
     const lokasiCoords = loc?.coords || null
     const fotoUrl = await uploadFoto(foto, `${user.nip}_keluar_${jamStr.replace(':','')}.jpg`)
@@ -637,9 +656,7 @@ const EmpIzin = ({ user, onAjukan, dbData, refreshData }) => {
 // ─── EMPLOYEE AJUKAN IZIN ─────────────────────────────────────────────────────
 const EmpAjukanIzin = ({ user, showToast, onBack, refreshData, dbData }) => {
   const [form, setForm] = useState({ jenis:'',mulai:'',selesai:'',alasan:'' })
-  const [selfie, setSelfie] = useState(null)
   const [lampiran, setLampiran] = useState(null)
-  const [showCamera, setShowCamera] = useState(false)
   const [err, setErr] = useState('')
   const [loading, setLoading] = useState(false)
   const [ok, setOk] = useState(false)
@@ -650,16 +667,15 @@ const EmpAjukanIzin = ({ user, showToast, onBack, refreshData, dbData }) => {
   const submit = async()=>{
     setErr('')
     if(!form.jenis||!form.mulai||!form.selesai||!form.alasan){setErr('Semua field wajib diisi');return}
-    if(!selfie){setErr('Selfie verifikasi wajib dilakukan');return}
     if(!lampiran){setErr('Lampiran bukti wajib diunggah');return}
     setLoading(true)
     const emp = dbData.karyawan.find(k=>k.nip===user.nip)||user
     const {error} = await supabase.from('izin').insert({
-      nip:user.nip,nama:user.nama,jabatan:emp.jabatan||'',
-      jenis_izin:form.jenis,tanggal_mulai:form.mulai,tanggal_selesai:form.selesai,
-      jumlah_hari:hari(),keterangan:form.alasan,status:'MENUNGGU',
+      nip:user.nip, nama:user.nama, jabatan:emp.jabatan||'',
+      jenis_izin:form.jenis, tanggal_mulai:form.mulai, tanggal_selesai:form.selesai,
+      jumlah_hari:hari(), keterangan:form.alasan, status:'MENUNGGU',
       diajukan_pada:new Date().toISOString().split('T')[0],
-      selfie_url:selfie,lampiran_nama:lampiran.name
+      lampiran_nama:lampiran.name
     })
     if(!error){
       await supabase.from('audit_log').insert({ user_name:user.nama,nip:user.nip,aktivitas:`Pengajuan izin ${form.mulai}–${form.selesai}`,keterangan:`${form.jenis}, ${hari()} hari` })
@@ -713,24 +729,19 @@ const EmpAjukanIzin = ({ user, showToast, onBack, refreshData, dbData }) => {
         </Card>
         <Card style={{ padding:16 }}>
           <div style={{ display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10 }}>
-            <div><p style={{ fontWeight:700,margin:0 }}>📷 Selfie Verifikasi</p><p style={{ fontSize:11,color:'#aaa',margin:0 }}>Wajib untuk konfirmasi identitas</p></div>
-            {!selfie?<BtnGrad small onClick={()=>setShowCamera(true)}>Ambil Selfie</BtnGrad>:<BtnGrad small outline onClick={()=>setSelfie(null)}>Ulangi</BtnGrad>}
-          </div>
-          {selfie?<img src={selfie} alt="selfie" style={{ width:'100%',borderRadius:12,maxHeight:180,objectFit:'cover' }}/>
-          :<div style={{ border:'2px dashed #e0e0e0',borderRadius:12,padding:20,textAlign:'center',color:'#ccc',fontSize:13 }}>Belum ada selfie</div>}
-        </Card>
-        <Card style={{ padding:16 }}>
-          <div style={{ display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10 }}>
-            <div><p style={{ fontWeight:700,margin:0 }}>📎 Lampiran Bukti</p><p style={{ fontSize:11,color:'#aaa',margin:0 }}>{form.jenis==='Izin Sakit'?'Surat dokter wajib':'Surat izin / dokumen pendukung'}</p></div>
+            <div>
+              <p style={{ fontWeight:700,margin:0 }}>📎 Lampiran Bukti</p>
+              <p style={{ fontSize:11,color:'#aaa',margin:0 }}>{form.jenis==='Izin Sakit'?'Surat dokter (wajib)':'Surat izin / dokumen pendukung'}</p>
+            </div>
             <BtnGrad small onClick={()=>fileRef.current.click()}>{lampiran?'Ganti':'Upload'}</BtnGrad>
           </div>
           <input ref={fileRef} type="file" accept="image/*,.pdf" style={{ display:'none' }} onChange={e=>{ if(e.target.files[0]) setLampiran(e.target.files[0]) }}/>
-          {lampiran?<div style={{ display:'flex',alignItems:'center',gap:10,background:'#F0FFF4',padding:'10px 14px',borderRadius:10 }}><span>📄</span><span style={{ fontSize:12,fontWeight:600,color:'#2E7D32' }}>{lampiran.name}</span></div>
-          :<div style={{ border:'2px dashed #e0e0e0',borderRadius:12,padding:20,textAlign:'center',color:'#ccc',fontSize:13 }}>Belum ada lampiran</div>}
+          {lampiran
+            ? <div style={{ display:'flex',alignItems:'center',gap:10,background:'#F0FFF4',padding:'10px 14px',borderRadius:10 }}><span>📄</span><span style={{ fontSize:12,fontWeight:600,color:'#2E7D32',flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap' }}>{lampiran.name}</span></div>
+            : <div style={{ border:'2px dashed #e0e0e0',borderRadius:12,padding:20,textAlign:'center',color:'#ccc',fontSize:13 }}>Belum ada lampiran</div>}
         </Card>
         <BtnGrad onClick={submit} disabled={loading}>{loading?'Mengirim...':'Ajukan Izin'}</BtnGrad>
       </div>
-      {showCamera && <CameraModal mode="in" onCapture={foto=>{setSelfie(foto)}} onClose={()=>setShowCamera(false)}/>}
     </div>
   )
 }
@@ -921,11 +932,13 @@ const HRDKaryawan = ({ user, showToast, dbData, refreshData }) => {
   const saveEdit = async()=>{
     setLoadingSave(true)
     const {error} = await supabase.from('master_karyawan').update({
-      nama:editForm.nama,email:editForm.email,no_hp:editForm.no_hp,jabatan:editForm.jabatan,divisi:editForm.divisi,
-      status:editForm.status,sisa_izin:Number(editForm.sisa_izin)||0,nik:editForm.nik,alamat:editForm.alamat,atasan:editForm.atasan,
-      gaji_pokok:Number(editForm.gaji_pokok)||0,tunjangan_jabatan:Number(editForm.tunjangan_jabatan)||0,
-      tunjangan_transport:Number(editForm.tunjangan_transport)||0,tunjangan_makan:Number(editForm.tunjangan_makan)||0,
-      bpjs_kesehatan:Number(editForm.bpjs_kesehatan)||0,bpjs_ketenagakerjaan:Number(editForm.bpjs_ketenagakerjaan)||0,pph21:Number(editForm.pph21)||0,
+      nama:editForm.nama, email:editForm.email, no_hp:editForm.no_hp,
+      jabatan:editForm.jabatan, divisi:editForm.divisi, status:editForm.status,
+      sisa_izin:Number(editForm.sisa_izin)||0, nik:editForm.nik, alamat:editForm.alamat, atasan:editForm.atasan,
+      jam_masuk_wajib:editForm.jam_masuk_wajib||'08:00',
+      gaji_pokok:Number(editForm.gaji_pokok)||0, tunjangan_jabatan:Number(editForm.tunjangan_jabatan)||0,
+      tunjangan_transport:Number(editForm.tunjangan_transport)||0, tunjangan_makan:Number(editForm.tunjangan_makan)||0,
+      bpjs_kesehatan:Number(editForm.bpjs_kesehatan)||0, bpjs_ketenagakerjaan:Number(editForm.bpjs_ketenagakerjaan)||0, pph21:Number(editForm.pph21)||0,
     }).eq('nip',selectedNIP)
     if(!error){ await supabase.from('audit_log').insert({ user_name:user.nama,nip:user.nip,aktivitas:`Edit data ${emp?.nama}`,keterangan:'' }); showToast('✅ Data disimpan!'); setEditMode(false); refreshData() }
     else showToast('❌ Gagal menyimpan')
@@ -1015,6 +1028,18 @@ const HRDKaryawan = ({ user, showToast, dbData, refreshData }) => {
                   {editMode&&k!=='nip'?efv(k):<span style={{ fontWeight:600,color:'#333',textAlign:'right',flex:1,marginLeft:8 }}>{emp[k]||'-'}</span>}
                 </div>
               ))}
+              {/* Jam Masuk Wajib per karyawan */}
+              <div style={{ marginTop:16,padding:14,borderRadius:14,background:'#E8F5E9',border:'1px solid #C8E6C9' }}>
+                <p style={{ fontSize:11,fontWeight:700,color:'#2E7D32',margin:'0 0 10px' }}>⏰ PENGATURAN JAM KERJA</p>
+                <div style={{ display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:13 }}>
+                  <span style={{ color:'#555' }}>Jam Masuk Wajib</span>
+                  {editMode
+                    ? <input type="time" value={editForm.jam_masuk_wajib||'08:00'} onChange={e=>setEditForm({...editForm,jam_masuk_wajib:e.target.value})} style={{ border:'1px solid #F5A623',borderRadius:8,padding:'4px 8px',fontSize:13,outline:'none' }}/>
+                    : <span style={{ fontWeight:700,color:'#2E7D32',fontSize:15 }}>{emp.jam_masuk_wajib||'08:00'}</span>
+                  }
+                </div>
+                <p style={{ fontSize:11,color:'#81C784',margin:'6px 0 0' }}>Keterlambatan dihitung dari jam ini</p>
+              </div>
               <div style={{ marginTop:16,padding:14,borderRadius:14,background:'#F9F9F9' }}>
                 <p style={{ fontSize:11,fontWeight:700,color:'#aaa',margin:'0 0 10px' }}>INFO GAJI</p>
                 {[['Gaji Pokok','gaji_pokok'],['Tunjangan Jabatan','tunjangan_jabatan'],['Tunjangan Transport','tunjangan_transport'],['Tunjangan Makan','tunjangan_makan'],['BPJS Kesehatan','bpjs_kesehatan'],['BPJS Ketenagakerjaan','bpjs_ketenagakerjaan'],['PPh 21','pph21']].map(([lbl,k])=>(
@@ -1041,12 +1066,47 @@ const HRDKaryawan = ({ user, showToast, dbData, refreshData }) => {
               {empAtt.length===0?<p style={{ textAlign:'center',color:'#aaa',padding:24,fontSize:13 }}>Tidak ada data</p>
               :empAtt.map((a,i)=>(
                 <div key={i} style={{ border:'1px solid #f0f0f0',borderRadius:14,padding:12,marginBottom:8 }}>
-                  <div style={{ display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8 }}><span style={{ fontWeight:700,fontSize:13 }}>{a.tanggal}</span><Chip status={a.status_kehadiran}/></div>
-                  {a.jam_masuk && <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8 }}>
+                  <div style={{ display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8 }}>
+                    <span style={{ fontWeight:700,fontSize:13 }}>{a.tanggal}</span>
+                    <Chip status={a.status_kehadiran}/>
+                  </div>
+                  {a.jam_masuk && <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:6,marginBottom:8 }}>
                     {[['Masuk',a.jam_masuk,'#E8F5E9','#2E7D32'],['Pulang',a.jam_keluar||'-','#FFF5F5','#C62828'],['Durasi',a.durasi||'-','#F5F5F5','#555']].map(([l,v,bg,c])=>(
                       <div key={l} style={{ background:bg,borderRadius:8,padding:8,textAlign:'center' }}><p style={{ fontSize:10,color:'#aaa',margin:0 }}>{l}</p><p style={{ fontWeight:700,fontSize:12,color:c,margin:0 }}>{v}</p></div>
                     ))}
                   </div>}
+                  {/* Foto & Lokasi */}
+                  <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:8 }}>
+                    {/* Clock In */}
+                    <div style={{ background:'#F0FFF4',borderRadius:10,padding:10 }}>
+                      <p style={{ fontSize:10,fontWeight:700,color:'#2E7D32',margin:'0 0 6px' }}>🟢 Clock In</p>
+                      {a.foto_masuk && (
+                        <a href={a.foto_masuk} target="_blank" rel="noreferrer">
+                          <img src={a.foto_masuk} alt="masuk" style={{ width:'100%',borderRadius:8,maxHeight:80,objectFit:'cover',display:'block',marginBottom:6 }}/>
+                        </a>
+                      )}
+                      {a.lokasi_masuk && <p style={{ fontSize:10,color:'#388E3C',margin:0,lineHeight:1.3 }}>📍 {a.lokasi_masuk}</p>}
+                      {a.koordinat_masuk && (
+                        <a href={`https://maps.google.com/?q=${a.koordinat_masuk}`} target="_blank" rel="noreferrer" style={{ fontSize:10,color:'#1565C0',fontWeight:700,display:'block',marginTop:4 }}>🗺️ Lihat Maps</a>
+                      )}
+                      {!a.foto_masuk && !a.lokasi_masuk && <p style={{ fontSize:10,color:'#ccc',margin:0 }}>Tidak ada data</p>}
+                    </div>
+                    {/* Clock Out */}
+                    <div style={{ background:'#FFF5F5',borderRadius:10,padding:10 }}>
+                      <p style={{ fontSize:10,fontWeight:700,color:'#C62828',margin:'0 0 6px' }}>🔴 Clock Out</p>
+                      {a.foto_keluar && (
+                        <a href={a.foto_keluar} target="_blank" rel="noreferrer">
+                          <img src={a.foto_keluar} alt="keluar" style={{ width:'100%',borderRadius:8,maxHeight:80,objectFit:'cover',display:'block',marginBottom:6 }}/>
+                        </a>
+                      )}
+                      {a.lokasi_keluar && <p style={{ fontSize:10,color:'#C62828',margin:0,lineHeight:1.3 }}>📍 {a.lokasi_keluar}</p>}
+                      {a.koordinat_keluar && (
+                        <a href={`https://maps.google.com/?q=${a.koordinat_keluar}`} target="_blank" rel="noreferrer" style={{ fontSize:10,color:'#1565C0',fontWeight:700,display:'block',marginTop:4 }}>🗺️ Lihat Maps</a>
+                      )}
+                      {!a.foto_keluar && !a.lokasi_keluar && <p style={{ fontSize:10,color:'#ccc',margin:0 }}>{a.jam_keluar?'Tidak ada data':'Belum clock out'}</p>}
+                    </div>
+                  </div>
+                  {a.menit_terlambat>0 && <p style={{ fontSize:11,color:'#F57F17',fontWeight:600,margin:'8px 0 0' }}>⚠️ Terlambat {a.menit_terlambat} menit</p>}
                 </div>
               ))}
             </div>
