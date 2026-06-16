@@ -437,65 +437,38 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
   const myAtt = dbData.attendance.filter(a=>a.nip===user.nip).slice(0,3)
   const emp = dbData.karyawan.find(k=>k.nip===user.nip)||user
 
-  // Upload foto ke Supabase Storage
-  const uploadFoto = async (base64, filename) => {
+  // ── Upload foto ke Supabase Storage ──
+  const uploadFoto = async (base64, path) => {
     try {
-      if (!base64 || !base64.startsWith('data:image')) {
-        console.error('[uploadFoto] base64 tidak valid')
-        return null
-      }
-      const parts = base64.split(',')
-      if (!parts[1] || parts[1].length < 100) {
-        console.error('[uploadFoto] base64 terlalu kecil, foto kosong')
-        return null
-      }
+      // Validasi base64
+      if (!base64?.startsWith('data:image')) return null
+      const b64data = base64.split(',')[1]
+      if (!b64data || b64data.length < 200) return null
 
-      // Convert base64 → binary
-      const byteStr = atob(parts[1])
-      const ia = new Uint8Array(byteStr.length)
-      for (let i = 0; i < byteStr.length; i++) ia[i] = byteStr.charCodeAt(i)
-      const blob = new Blob([ia], { type: 'image/jpeg' })
+      // base64 → Uint8Array tanpa ArrayBuffer intermediate
+      const bin = atob(b64data)
+      const bytes = new Uint8Array(bin.length)
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+      const file = new File([bytes], path.split('/').pop(), { type: 'image/jpeg' })
 
-      console.log('[uploadFoto] size:', Math.round(blob.size/1024), 'KB, file:', filename)
+      console.log('[upload] uploading', path, Math.round(file.size/1024), 'KB')
 
-      const path = `absensi/${today}/${filename}`
-
-      // Upload via SDK
-      const { data, error } = await supabase.storage
+      const { error } = await supabase.storage
         .from('foto-absensi')
-        .upload(path, blob, {
-          contentType: 'image/jpeg',
-          upsert: true,
-          cacheControl: '3600'
-        })
+        .upload(path, file, { contentType: 'image/jpeg', upsert: true })
 
       if (error) {
-        console.error('[uploadFoto] SDK error:', error.message, error)
-        // Coba cek apakah bucket ada
-        if (error.message?.includes('Bucket not found') || error.statusCode === 400) {
-          console.error('[uploadFoto] Bucket foto-absensi tidak ditemukan! Buat dulu di Supabase Storage.')
-        }
+        console.error('[upload] error:', error.message)
         return null
       }
 
-      const { data: urlData } = supabase.storage.from('foto-absensi').getPublicUrl(path)
-      console.log('[uploadFoto] sukses:', urlData.publicUrl)
-      return urlData.publicUrl
-
-    } catch (e) {
-      console.error('[uploadFoto] exception:', e)
+      const { data } = supabase.storage.from('foto-absensi').getPublicUrl(path)
+      console.log('[upload] ok:', data.publicUrl)
+      return data.publicUrl
+    } catch(e) {
+      console.error('[upload] exception:', e)
       return null
     }
-  }
-
-  // ── Helper waktu WIB ──
-  const toWIBDate = (d = new Date()) => new Date(d.toLocaleString('en-US', { timeZone: 'Asia/Jakarta' }))
-  const getWIBString = (d = new Date()) => {
-    const w = toWIBDate(d)
-    const hh = String(w.getHours()).padStart(2,'0')
-    const mm = String(w.getMinutes()).padStart(2,'0')
-    const date = `${w.getFullYear()}-${String(w.getMonth()+1).padStart(2,'0')}-${String(w.getDate()).padStart(2,'0')}`
-    return { jam:`${hh}:${mm}`, tanggal:date }
   }
 
   const handleClockIn = async (foto, loc) => {
@@ -505,27 +478,25 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
     const jamWajib = emp.jam_masuk_wajib || '08:00'
     const [wajibH, wajibM] = jamWajib.split(':').map(Number)
     const [nowH, nowM] = jamStr.split(':').map(Number)
-    const wajibMenit = wajibH * 60 + wajibM
-    const nowMenit   = nowH * 60 + nowM
-    const menit  = Math.max(0, nowMenit - wajibMenit)
+    const menit  = Math.max(0, (nowH*60+nowM) - (wajibH*60+wajibM))
     const status = menit > 0 ? 'TERLAMBAT' : 'HADIR'
     const lokasiLabel  = loc?.label  || 'Tidak diketahui'
     const lokasiCoords = loc?.coords || null
-    const fotoUrl = await uploadFoto(foto, `${user.nip}_masuk_${jamStr.replace(':','')}.jpg`)
-    if (!fotoUrl) {
-      showToast('❌ Upload foto gagal — cek bucket Supabase')
-      setLoading(false)
-      return
-    }
+
+    const path = `${tanggalWIB}/${user.nip}_masuk_${jamStr.replace(':','')}.jpg`
+    const fotoUrl = await uploadFoto(foto, path)
+
     const { error } = await supabase.from('attendance').insert({
       nip:user.nip, nama:user.nama, tanggal:tanggalWIB, jam_masuk:jamStr,
       status_kehadiran:status, menit_terlambat:menit,
       lokasi_masuk:lokasiLabel, koordinat_masuk:lokasiCoords,
-      foto_masuk:fotoUrl, status_validasi:'MENUNGGU'
+      foto_masuk: fotoUrl || foto,  // fallback base64 jika storage gagal
+      status_validasi:'MENUNGGU'
     })
     if (!error) {
       await supabase.from('audit_log').insert({ user_name:user.nama, nip:user.nip, aktivitas:'Clock In', keterangan:`${jamStr} WIB · ${lokasiLabel}` })
-      showToast('✅ Clock In berhasil!'); refreshData()
+      showToast(fotoUrl ? '✅ Clock In berhasil!' : '✅ Clock In berhasil (foto lokal)')
+      refreshData()
     } else { console.error(error); showToast('❌ Gagal clock in') }
     setLoading(false)
   }
@@ -534,29 +505,28 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
     if (!todayAtt) return
     setLoading(true)
     showToast('⏳ Mengupload foto...')
-    const { jam: jamStr } = getWIBString()
-    // Hitung durasi: parse jam_masuk sebagai WIB
+    const { jam: jamStr, tanggal: tanggalWIB } = getWIBString()
     const [mH, mM] = todayAtt.jam_masuk.split(':').map(Number)
     const [kH, kM] = jamStr.split(':').map(Number)
-    const durMenit  = (kH * 60 + kM) - (mH * 60 + mM)
+    const durMenit  = (kH*60+kM) - (mH*60+mM)
     const lemburJam = Math.max(0, (durMenit - 540) / 60)
     const lokasiLabel  = loc?.label  || 'Tidak diketahui'
     const lokasiCoords = loc?.coords || null
-    const fotoUrl = await uploadFoto(foto, `${user.nip}_keluar_${jamStr.replace(':','')}.jpg`)
-    if (!fotoUrl) {
-      showToast('❌ Upload foto gagal — cek bucket Supabase')
-      setLoading(false)
-      return
-    }
+
+    const path = `${tanggalWIB}/${user.nip}_keluar_${jamStr.replace(':','')}.jpg`
+    const fotoUrl = await uploadFoto(foto, path)
+
     const { error } = await supabase.from('attendance').update({
       jam_keluar:jamStr,
       durasi:`${Math.floor(durMenit/60)}j ${durMenit%60}m`,
       jam_lembur:Math.round(lemburJam*100)/100,
-      foto_keluar:fotoUrl, lokasi_keluar:lokasiLabel, koordinat_keluar:lokasiCoords
+      foto_keluar: fotoUrl || foto,
+      lokasi_keluar:lokasiLabel, koordinat_keluar:lokasiCoords
     }).eq('id', todayAtt.id)
     if (!error) {
       await supabase.from('audit_log').insert({ user_name:user.nama, nip:user.nip, aktivitas:'Clock Out', keterangan:`${jamStr} WIB · ${lokasiLabel}` })
-      showToast('✅ Clock Out berhasil!'); refreshData()
+      showToast(fotoUrl ? '✅ Clock Out berhasil!' : '✅ Clock Out berhasil (foto lokal)')
+      refreshData()
     } else { console.error(error); showToast('❌ Gagal clock out') }
     setLoading(false)
   }
