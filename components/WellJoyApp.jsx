@@ -215,7 +215,6 @@ const CameraModal = ({ mode, onCapture, onClose }) => {
   }, [])
 
   // ── Step 2: buka kamera setelah lokasi dapat ──
-  // Video element sudah ada di DOM (selalu render), jadi srcObject langsung bisa di-set
   useEffect(() => {
     if (phase !== 'cam') return
     navigator.mediaDevices.getUserMedia({
@@ -225,11 +224,17 @@ const CameraModal = ({ mode, onCapture, onClose }) => {
     .then(stream => {
       streamRef.current = stream
       const vid = videoRef.current
-      if (vid) {
-        vid.srcObject = stream
-        vid.onloadedmetadata = () => vid.play()
+      if (!vid) return
+      vid.srcObject = stream
+      // Tunggu video benar-benar playing DAN punya dimensi
+      vid.onloadedmetadata = () => {
+        vid.play().then(() => {
+          // Tunggu frame pertama benar-benar ter-render
+          vid.requestVideoFrameCallback
+            ? vid.requestVideoFrameCallback(() => setPhase('ready'))
+            : setTimeout(() => setPhase('ready'), 500)
+        }).catch(() => setPhase('ready'))
       }
-      setPhase('ready')
     })
     .catch(() => {
       setErrMsg('Izin kamera ditolak. Aktifkan di pengaturan browser lalu muat ulang.')
@@ -240,26 +245,46 @@ const CameraModal = ({ mode, onCapture, onClose }) => {
   const capture = () => {
     const vid = videoRef.current
     const cvs = canvasRef.current
-    if (!vid || !cvs) { console.error('[capture] video atau canvas null'); return }
-    if (vid.readyState < 2) { console.error('[capture] video belum siap, readyState:', vid.readyState); return }
+    if (!vid || !cvs) { console.error('[capture] ref null'); return }
+
     const w = vid.videoWidth
     const h = vid.videoHeight
-    if (!w || !h) { console.error('[capture] videoWidth/Height 0, video belum play'); return }
-    // Draw frame ke canvas
+    console.log('[capture] readyState:', vid.readyState, 'size:', w, 'x', h)
+
+    if (!w || !h || vid.readyState < 2) {
+      // Video belum siap — tunggu sebentar lalu coba lagi
+      console.warn('[capture] video belum siap, retry 300ms...')
+      setTimeout(() => capture(), 300)
+      return
+    }
+
     cvs.width = w
     cvs.height = h
-    cvs.getContext('2d').drawImage(vid, 0, 0, w, h)
-    // Compress langsung di canvas — synchronous, tidak butuh Image.onload
+    const ctx = cvs.getContext('2d')
+    ctx.drawImage(vid, 0, 0, w, h)
+
+    // Cek apakah canvas benar-benar ada isinya (pixel pertama tidak hitam)
+    const pixel = ctx.getImageData(0, 0, 1, 1).data
+    console.log('[capture] pixel[0,0] rgba:', pixel[0], pixel[1], pixel[2], pixel[3])
+    if (pixel[3] === 0 || (pixel[0] === 0 && pixel[1] === 0 && pixel[2] === 0)) {
+      console.warn('[capture] canvas masih hitam, retry 300ms...')
+      setTimeout(() => capture(), 300)
+      return
+    }
+
     setCompressing(true)
     try {
-      const result = compressCanvas(cvs, 800, 0.7)
-      console.log('[capture] ok, size:', Math.round(result.length * 3/4 / 1024), 'KB')
+      const result = compressCanvas(cvs, 800, 0.75)
+      const sizeKB = Math.round(result.length * 3/4 / 1024)
+      console.log('[capture] sukses, size:', sizeKB, 'KB')
+      if (sizeKB < 5) {
+        console.warn('[capture] ukuran terlalu kecil, kemungkinan canvas kosong')
+      }
       setCaptured(result)
       stopStream()
       setPhase('captured')
     } catch(e) {
       console.error('[capture] error:', e)
-      // fallback tanpa compress
       const raw = cvs.toDataURL('image/jpeg', 0.7)
       setCaptured(raw)
       stopStream()
