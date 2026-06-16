@@ -423,35 +423,53 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
   const myAtt = dbData.attendance.filter(a=>a.nip===user.nip).slice(0,3)
   const emp = dbData.karyawan.find(k=>k.nip===user.nip)||user
 
-  // Upload base64 foto ke Supabase Storage, return public URL
+  // Upload foto ke Supabase Storage
   const uploadFoto = async (base64, filename) => {
     try {
       if (!base64 || !base64.startsWith('data:image')) {
-        console.error('Invalid base64 foto')
+        console.error('[uploadFoto] base64 tidak valid')
         return null
       }
-      // Pastikan base64 punya data
       const parts = base64.split(',')
       if (!parts[1] || parts[1].length < 100) {
-        console.error('Base64 foto kosong atau terlalu kecil')
+        console.error('[uploadFoto] base64 terlalu kecil, foto kosong')
         return null
       }
-      // Convert base64 → Blob
+
+      // Convert base64 → binary
       const byteStr = atob(parts[1])
-      const ab = new ArrayBuffer(byteStr.length)
-      const ia = new Uint8Array(ab)
+      const ia = new Uint8Array(byteStr.length)
       for (let i = 0; i < byteStr.length; i++) ia[i] = byteStr.charCodeAt(i)
-      const blob = new Blob([ab], { type: 'image/jpeg' })
+      const blob = new Blob([ia], { type: 'image/jpeg' })
+
+      console.log('[uploadFoto] size:', Math.round(blob.size/1024), 'KB, file:', filename)
 
       const path = `absensi/${today}/${filename}`
-      const { error } = await supabase.storage
+
+      // Upload via SDK
+      const { data, error } = await supabase.storage
         .from('foto-absensi')
-        .upload(path, blob, { contentType: 'image/jpeg', upsert: true })
-      if (error) { console.error('Upload error:', error); return null }
-      const { data } = supabase.storage.from('foto-absensi').getPublicUrl(path)
-      return data.publicUrl
+        .upload(path, blob, {
+          contentType: 'image/jpeg',
+          upsert: true,
+          cacheControl: '3600'
+        })
+
+      if (error) {
+        console.error('[uploadFoto] SDK error:', error.message, error)
+        // Coba cek apakah bucket ada
+        if (error.message?.includes('Bucket not found') || error.statusCode === 400) {
+          console.error('[uploadFoto] Bucket foto-absensi tidak ditemukan! Buat dulu di Supabase Storage.')
+        }
+        return null
+      }
+
+      const { data: urlData } = supabase.storage.from('foto-absensi').getPublicUrl(path)
+      console.log('[uploadFoto] sukses:', urlData.publicUrl)
+      return urlData.publicUrl
+
     } catch (e) {
-      console.error('uploadFoto error:', e)
+      console.error('[uploadFoto] exception:', e)
       return null
     }
   }
@@ -480,6 +498,11 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
     const lokasiLabel  = loc?.label  || 'Tidak diketahui'
     const lokasiCoords = loc?.coords || null
     const fotoUrl = await uploadFoto(foto, `${user.nip}_masuk_${jamStr.replace(':','')}.jpg`)
+    if (!fotoUrl) {
+      showToast('❌ Upload foto gagal — cek bucket Supabase')
+      setLoading(false)
+      return
+    }
     const { error } = await supabase.from('attendance').insert({
       nip:user.nip, nama:user.nama, tanggal:tanggalWIB, jam_masuk:jamStr,
       status_kehadiran:status, menit_terlambat:menit,
@@ -506,6 +529,11 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
     const lokasiLabel  = loc?.label  || 'Tidak diketahui'
     const lokasiCoords = loc?.coords || null
     const fotoUrl = await uploadFoto(foto, `${user.nip}_keluar_${jamStr.replace(':','')}.jpg`)
+    if (!fotoUrl) {
+      showToast('❌ Upload foto gagal — cek bucket Supabase')
+      setLoading(false)
+      return
+    }
     const { error } = await supabase.from('attendance').update({
       jam_keluar:jamStr,
       durasi:`${Math.floor(durMenit/60)}j ${durMenit%60}m`,
