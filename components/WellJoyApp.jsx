@@ -1641,7 +1641,7 @@ const RegisterPage = ({ onBack }) => {
 
 // ─── APP ROOT ─────────────────────────────────────────────────────────────────
 export default function WellJoyApp() {
-  const [screen, setScreen] = useState('login')
+  const [screen, setScreen] = useState('loading')  // loading dulu, cek session
   const [user, setUser] = useState(null)
   const [empNav, setEmpNav] = useState('home')
   const [hrdNav, setHrdNav] = useState('dashboard')
@@ -1672,15 +1672,65 @@ export default function WellJoyApp() {
     setLoadingData(false)
   },[])
 
+  // ── Restore session dari localStorage saat pertama load ──
+  useEffect(()=>{
+    try {
+      const saved = localStorage.getItem('welljoy_session')
+      if (saved) {
+        const parsed = JSON.parse(saved)
+        // Verifikasi session masih valid (cek NIP masih ada di DB)
+        supabase.from('users').select('*').eq('nip', parsed.nip).eq('status','aktif').maybeSingle()
+          .then(({ data }) => {
+            if (data) {
+              setUser({ ...parsed, ...data })
+              setScreen('app')
+            } else {
+              localStorage.removeItem('welljoy_session')
+              setScreen('login')
+            }
+          })
+          .catch(() => {
+            // Kalau offline/error, pakai data cache dulu
+            setUser(parsed)
+            setScreen('app')
+          })
+      } else {
+        setScreen('login')
+      }
+    } catch {
+      setScreen('login')
+    }
+  }, [])
+
   useEffect(()=>{ if(screen==='app') fetchData() },[screen,fetchData])
 
   const [ajukanIzin, setAjukanIzin] = useState(false)
 
-  const handleLogin = userData=>{ setUser(userData); setScreen('app'); if(userData.role==='HRD') setHrdNav('dashboard'); else setEmpNav('home') }
+  const handleLogin = userData=>{
+    setUser(userData)
+    setScreen('app')
+    // Simpan session — jangan simpan password
+    const { password:_, ...safeUser } = userData
+    localStorage.setItem('welljoy_session', JSON.stringify(safeUser))
+    if(userData.role==='HRD') setHrdNav('dashboard'); else setEmpNav('home')
+  }
+
   const handleLogout = async()=>{
     if(user) await supabase.from('audit_log').insert({ user_name:user.nama,nip:user.nip,aktivitas:'Logout dari sistem',keterangan:'' })
-    setUser(null); setScreen('login'); setAjukanIzin(false)
+    setUser(null)
+    setScreen('login')
+    setAjukanIzin(false)
+    localStorage.removeItem('welljoy_session')
   }
+
+  // ── Loading screen saat cek session ──
+  if(screen==='loading') return (
+    <div style={{ minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'#FBF5F5',flexDirection:'column',gap:16 }}>
+      <WellJoyLogo size={90}/>
+      <div style={{ width:32,height:32,borderRadius:'50%',border:'3px solid #f0f0f0',borderTop:'3px solid #E53935',animation:'spin 0.8s linear infinite' }}/>
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+    </div>
+  )
 
   if(screen==='login') return <LoginPage onLogin={handleLogin} onRegister={()=>setScreen('register')}/>
   if(screen==='register') return <RegisterPage onBack={()=>setScreen('login')}/>
@@ -1692,6 +1742,7 @@ export default function WellJoyApp() {
     <div style={{ minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'#F8F8F8',flexDirection:'column',gap:16 }}>
       <WellJoyLogo size={80}/>
       <p style={{ color:'#aaa',fontSize:14 }}>Memuat data...</p>
+      <div style={{ width:32,height:32,borderRadius:'50%',border:'3px solid #f0f0f0',borderTop:'3px solid #E53935',animation:'spin 0.8s linear infinite' }}/>
     </div>
   )
 
