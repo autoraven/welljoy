@@ -412,11 +412,11 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
 
   useEffect(()=>{ const t=setInterval(()=>setNow(new Date()),1000); return()=>clearInterval(t); },[])
 
-  // Waktu WIB untuk display dan logika tanggal
-  const wibOffset = 7 * 60 // menit
-  const wibDate = new Date(now.getTime() + (wibOffset + now.getTimezoneOffset()) * 60000)
-  const jam = `${String(wibDate.getUTCHours()).padStart(2,'0')}:${String(wibDate.getUTCMinutes()).padStart(2,'0')}:${String(wibDate.getUTCSeconds()).padStart(2,'0')}`
-  const today = wibDate.toISOString().slice(0,10)
+  // Paksa timezone Asia/Jakarta (WIB) — cara paling reliable
+  const toWIB = (date) => new Date(date.toLocaleString('en-US', { timeZone: 'Asia/Jakarta' }))
+  const wibNow  = toWIB(now)
+  const jam     = `${String(wibNow.getHours()).padStart(2,'0')}:${String(wibNow.getMinutes()).padStart(2,'0')}:${String(wibNow.getSeconds()).padStart(2,'0')}`
+  const today   = `${wibNow.getFullYear()}-${String(wibNow.getMonth()+1).padStart(2,'0')}-${String(wibNow.getDate()).padStart(2,'0')}`
   const todayAtt = dbData.attendance.find(a=>a.nip===user.nip&&a.tanggal===today)
   const clockedIn = !!todayAtt?.jam_masuk
   const clockedOut = !!todayAtt?.jam_keluar
@@ -457,30 +457,31 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
   }
 
   // ── Helper waktu WIB ──
-  const nowWIB = () => {
-    const now = new Date()
-    // Offset WIB = UTC+7 = +420 menit
-    const wib = new Date(now.getTime() + (7 * 60 - now.getTimezoneOffset()) * 60000)
-    return wib
+  const toWIBDate = (d = new Date()) => new Date(d.toLocaleString('en-US', { timeZone: 'Asia/Jakarta' }))
+  const getWIBString = (d = new Date()) => {
+    const w = toWIBDate(d)
+    const hh = String(w.getHours()).padStart(2,'0')
+    const mm = String(w.getMinutes()).padStart(2,'0')
+    const date = `${w.getFullYear()}-${String(w.getMonth()+1).padStart(2,'0')}-${String(w.getDate()).padStart(2,'0')}`
+    return { jam:`${hh}:${mm}`, tanggal:date }
   }
-  const todayWIB = nowWIB().toISOString().slice(0,10)
 
   const handleClockIn = async (foto, loc) => {
     setLoading(true)
     showToast('⏳ Mengupload foto...')
-    const wib = nowWIB()
-    const jamStr = `${String(wib.getUTCHours()).padStart(2,'0')}:${String(wib.getUTCMinutes()).padStart(2,'0')}`
+    const { jam: jamStr, tanggal: tanggalWIB } = getWIBString()
     const jamWajib = emp.jam_masuk_wajib || '08:00'
     const [wajibH, wajibM] = jamWajib.split(':').map(Number)
+    const [nowH, nowM] = jamStr.split(':').map(Number)
     const wajibMenit = wajibH * 60 + wajibM
-    const nowMenit   = wib.getUTCHours() * 60 + wib.getUTCMinutes()
+    const nowMenit   = nowH * 60 + nowM
     const menit  = Math.max(0, nowMenit - wajibMenit)
     const status = menit > 0 ? 'TERLAMBAT' : 'HADIR'
     const lokasiLabel  = loc?.label  || 'Tidak diketahui'
     const lokasiCoords = loc?.coords || null
     const fotoUrl = await uploadFoto(foto, `${user.nip}_masuk_${jamStr.replace(':','')}.jpg`)
     const { error } = await supabase.from('attendance').insert({
-      nip:user.nip, nama:user.nama, tanggal:todayWIB, jam_masuk:jamStr,
+      nip:user.nip, nama:user.nama, tanggal:tanggalWIB, jam_masuk:jamStr,
       status_kehadiran:status, menit_terlambat:menit,
       lokasi_masuk:lokasiLabel, koordinat_masuk:lokasiCoords,
       foto_masuk:fotoUrl, status_validasi:'MENUNGGU'
@@ -496,10 +497,11 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
     if (!todayAtt) return
     setLoading(true)
     showToast('⏳ Mengupload foto...')
-    const wib = nowWIB()
-    const jamStr = `${String(wib.getUTCHours()).padStart(2,'0')}:${String(wib.getUTCMinutes()).padStart(2,'0')}`
-    const masuk = new Date(`${todayAtt.tanggal}T${todayAtt.jam_masuk}:00+07:00`)
-    const durMenit  = Math.round((new Date() - masuk) / 60000)
+    const { jam: jamStr } = getWIBString()
+    // Hitung durasi: parse jam_masuk sebagai WIB
+    const [mH, mM] = todayAtt.jam_masuk.split(':').map(Number)
+    const [kH, kM] = jamStr.split(':').map(Number)
+    const durMenit  = (kH * 60 + kM) - (mH * 60 + mM)
     const lemburJam = Math.max(0, (durMenit - 540) / 60)
     const lokasiLabel  = loc?.label  || 'Tidak diketahui'
     const lokasiCoords = loc?.coords || null
