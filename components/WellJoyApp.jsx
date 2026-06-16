@@ -411,9 +411,12 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
   const [loading, setLoading] = useState(false)
 
   useEffect(()=>{ const t=setInterval(()=>setNow(new Date()),1000); return()=>clearInterval(t); },[])
-  const jam = now.toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit',second:'2-digit',timeZone:'Asia/Jakarta'})
 
-  const today = new Date().toISOString().split('T')[0]
+  // Waktu WIB untuk display dan logika tanggal
+  const wibOffset = 7 * 60 // menit
+  const wibDate = new Date(now.getTime() + (wibOffset + now.getTimezoneOffset()) * 60000)
+  const jam = `${String(wibDate.getUTCHours()).padStart(2,'0')}:${String(wibDate.getUTCMinutes()).padStart(2,'0')}:${String(wibDate.getUTCSeconds()).padStart(2,'0')}`
+  const today = wibDate.toISOString().slice(0,10)
   const todayAtt = dbData.attendance.find(a=>a.nip===user.nip&&a.tanggal===today)
   const clockedIn = !!todayAtt?.jam_masuk
   const clockedOut = !!todayAtt?.jam_keluar
@@ -453,29 +456,37 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
     }
   }
 
+  // ── Helper waktu WIB ──
+  const nowWIB = () => {
+    const now = new Date()
+    // Offset WIB = UTC+7 = +420 menit
+    const wib = new Date(now.getTime() + (7 * 60 - now.getTimezoneOffset()) * 60000)
+    return wib
+  }
+  const todayWIB = nowWIB().toISOString().slice(0,10)
+
   const handleClockIn = async (foto, loc) => {
     setLoading(true)
     showToast('⏳ Mengupload foto...')
-    const nowT = new Date()
-    const jamStr = nowT.toTimeString().slice(0,5)
-    // Gunakan jam_masuk_wajib dari data karyawan, default 08:00
+    const wib = nowWIB()
+    const jamStr = `${String(wib.getUTCHours()).padStart(2,'0')}:${String(wib.getUTCMinutes()).padStart(2,'0')}`
     const jamWajib = emp.jam_masuk_wajib || '08:00'
     const [wajibH, wajibM] = jamWajib.split(':').map(Number)
     const wajibMenit = wajibH * 60 + wajibM
-    const nowMenit = nowT.getHours() * 60 + nowT.getMinutes()
-    const menit = Math.max(0, nowMenit - wajibMenit)
+    const nowMenit   = wib.getUTCHours() * 60 + wib.getUTCMinutes()
+    const menit  = Math.max(0, nowMenit - wajibMenit)
     const status = menit > 0 ? 'TERLAMBAT' : 'HADIR'
     const lokasiLabel  = loc?.label  || 'Tidak diketahui'
     const lokasiCoords = loc?.coords || null
     const fotoUrl = await uploadFoto(foto, `${user.nip}_masuk_${jamStr.replace(':','')}.jpg`)
     const { error } = await supabase.from('attendance').insert({
-      nip:user.nip, nama:user.nama, tanggal:today, jam_masuk:jamStr,
+      nip:user.nip, nama:user.nama, tanggal:todayWIB, jam_masuk:jamStr,
       status_kehadiran:status, menit_terlambat:menit,
       lokasi_masuk:lokasiLabel, koordinat_masuk:lokasiCoords,
       foto_masuk:fotoUrl, status_validasi:'MENUNGGU'
     })
     if (!error) {
-      await supabase.from('audit_log').insert({ user_name:user.nama, nip:user.nip, aktivitas:'Clock In', keterangan:`${jamStr} · ${lokasiLabel}` })
+      await supabase.from('audit_log').insert({ user_name:user.nama, nip:user.nip, aktivitas:'Clock In', keterangan:`${jamStr} WIB · ${lokasiLabel}` })
       showToast('✅ Clock In berhasil!'); refreshData()
     } else { console.error(error); showToast('❌ Gagal clock in') }
     setLoading(false)
@@ -485,21 +496,22 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
     if (!todayAtt) return
     setLoading(true)
     showToast('⏳ Mengupload foto...')
-    const nowT = new Date()
-    const jamStr = nowT.toTimeString().slice(0,5)
-    const masuk = new Date(`${today}T${todayAtt.jam_masuk}`)
-    const durMenit = Math.round((nowT - masuk) / 60000)
+    const wib = nowWIB()
+    const jamStr = `${String(wib.getUTCHours()).padStart(2,'0')}:${String(wib.getUTCMinutes()).padStart(2,'0')}`
+    const masuk = new Date(`${todayAtt.tanggal}T${todayAtt.jam_masuk}:00+07:00`)
+    const durMenit  = Math.round((new Date() - masuk) / 60000)
     const lemburJam = Math.max(0, (durMenit - 540) / 60)
     const lokasiLabel  = loc?.label  || 'Tidak diketahui'
     const lokasiCoords = loc?.coords || null
     const fotoUrl = await uploadFoto(foto, `${user.nip}_keluar_${jamStr.replace(':','')}.jpg`)
     const { error } = await supabase.from('attendance').update({
-      jam_keluar:jamStr, durasi:`${Math.floor(durMenit/60)}j ${durMenit%60}m`,
+      jam_keluar:jamStr,
+      durasi:`${Math.floor(durMenit/60)}j ${durMenit%60}m`,
       jam_lembur:Math.round(lemburJam*100)/100,
       foto_keluar:fotoUrl, lokasi_keluar:lokasiLabel, koordinat_keluar:lokasiCoords
     }).eq('id', todayAtt.id)
     if (!error) {
-      await supabase.from('audit_log').insert({ user_name:user.nama, nip:user.nip, aktivitas:'Clock Out', keterangan:`${jamStr} · ${lokasiLabel}` })
+      await supabase.from('audit_log').insert({ user_name:user.nama, nip:user.nip, aktivitas:'Clock Out', keterangan:`${jamStr} WIB · ${lokasiLabel}` })
       showToast('✅ Clock Out berhasil!'); refreshData()
     } else { console.error(error); showToast('❌ Gagal clock out') }
     setLoading(false)
