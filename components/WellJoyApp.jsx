@@ -134,20 +134,18 @@ const NotifPanel = ({ nip, onClose, notifications=[], onMarkRead, onMarkAllRead,
   )
 }
 
-// ─── COMPRESS IMAGE ───────────────────────────────────────────────────────────
-const compressImage = (dataUrl, maxWidth=800, quality=0.6) => {
-  return new Promise(resolve => {
-    const img = new Image()
-    img.onload = () => {
-      const canvas = document.createElement('canvas')
-      let w = img.width, h = img.height
-      if (w > maxWidth) { h = Math.round(h * maxWidth / w); w = maxWidth }
-      canvas.width = w; canvas.height = h
-      canvas.getContext('2d').drawImage(img, 0, 0, w, h)
-      resolve(canvas.toDataURL('image/jpeg', quality))
-    }
-    img.src = dataUrl
-  })
+// ─── COMPRESS IMAGE (resize langsung di canvas, tanpa Image element) ──────────
+const compressCanvas = (srcCanvas, maxWidth = 800, quality = 0.65) => {
+  const w = srcCanvas.width
+  const h = srcCanvas.height
+  const ratio = Math.min(1, maxWidth / w)
+  const newW = Math.round(w * ratio)
+  const newH = Math.round(h * ratio)
+  const dst = document.createElement('canvas')
+  dst.width = newW
+  dst.height = newH
+  dst.getContext('2d').drawImage(srcCanvas, 0, 0, newW, newH)
+  return dst.toDataURL('image/jpeg', quality)
 }
 
 // ─── GET LOCATION ─────────────────────────────────────────────────────────────
@@ -242,30 +240,33 @@ const CameraModal = ({ mode, onCapture, onClose }) => {
   const capture = () => {
     const vid = videoRef.current
     const cvs = canvasRef.current
-    if (!vid || !cvs || vid.readyState < 2) return
-    const w = vid.videoWidth || 640
-    const h = vid.videoHeight || 480
-    cvs.width = w; cvs.height = h
+    if (!vid || !cvs) { console.error('[capture] video atau canvas null'); return }
+    if (vid.readyState < 2) { console.error('[capture] video belum siap, readyState:', vid.readyState); return }
+    const w = vid.videoWidth
+    const h = vid.videoHeight
+    if (!w || !h) { console.error('[capture] videoWidth/Height 0, video belum play'); return }
+    // Draw frame ke canvas
+    cvs.width = w
+    cvs.height = h
     cvs.getContext('2d').drawImage(vid, 0, 0, w, h)
+    // Compress langsung di canvas — synchronous, tidak butuh Image.onload
     setCompressing(true)
-    // Compress async tanpa blokir UI
-    setTimeout(async () => {
-      try {
-        const raw = cvs.toDataURL('image/jpeg', 0.9)
-        const compressed = await compressImage(raw, 800, 0.65)
-        setCaptured(compressed)
-        stopStream()
-        setPhase('captured')
-      } catch {
-        // fallback tanpa compress
-        const raw = cvs.toDataURL('image/jpeg', 0.7)
-        setCaptured(raw)
-        stopStream()
-        setPhase('captured')
-      } finally {
-        setCompressing(false)
-      }
-    }, 50)
+    try {
+      const result = compressCanvas(cvs, 800, 0.7)
+      console.log('[capture] ok, size:', Math.round(result.length * 3/4 / 1024), 'KB')
+      setCaptured(result)
+      stopStream()
+      setPhase('captured')
+    } catch(e) {
+      console.error('[capture] error:', e)
+      // fallback tanpa compress
+      const raw = cvs.toDataURL('image/jpeg', 0.7)
+      setCaptured(raw)
+      stopStream()
+      setPhase('captured')
+    } finally {
+      setCompressing(false)
+    }
   }
 
   const handleConfirm = () => { onCapture(captured, locationRef.current); onClose() }
