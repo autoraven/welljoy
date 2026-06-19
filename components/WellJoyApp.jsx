@@ -257,26 +257,23 @@ const CameraModal = ({ mode, onCapture, onClose }) => {
       return
     }
 
-    // 1. Draw dulu SEBELUM stop stream
+    // Draw dulu SEBELUM stop stream
     cvs.width = w
     cvs.height = h
     cvs.getContext('2d').drawImage(vid, 0, 0, w, h)
 
-    // 2. Stop stream SETELAH draw
+    // Stop stream SETELAH draw
     stopStream()
 
-    // 3. Compress
     setCompressing(true)
     try {
-      const result = compressCanvas(cvs, 800, 0.75)
+      const result = cvs.toDataURL('image/jpeg', 0.8)
       const sizeKB = Math.round(result.length * 3/4 / 1024)
       console.log('[capture] sukses, size:', sizeKB, 'KB, dims:', w, 'x', h)
       setCaptured(result)
       setPhase('captured')
     } catch(e) {
       console.error('[capture] error:', e)
-      setCaptured(cvs.toDataURL('image/jpeg', 0.7))
-      setPhase('captured')
     } finally {
       setCompressing(false)
     }
@@ -472,6 +469,8 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
   }
 
   const handleClockIn = async (foto, loc) => {
+    console.log('[clockIn] foto type:', typeof foto, 'starts:', foto?.slice(0,30), 'length:', foto?.length)
+    console.log('[clockIn] loc:', loc)
     setLoading(true)
     showToast('⏳ Mengupload foto...')
     const { jam: jamStr, tanggal: tanggalWIB } = getWIBString()
