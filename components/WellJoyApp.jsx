@@ -437,42 +437,46 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
   // ── Upload foto ke Supabase Storage ──
   const uploadFoto = async (base64, path) => {
     try {
-      // Validasi base64
-      if (!base64?.startsWith('data:image')) return null
+      if (!base64?.startsWith('data:image')) { console.warn('[upload] base64 invalid'); return null }
       const b64data = base64.split(',')[1]
-      if (!b64data || b64data.length < 200) return null
+      if (!b64data || b64data.length < 200) { console.warn('[upload] base64 kosong'); return null }
 
-      // base64 → Uint8Array tanpa ArrayBuffer intermediate
       const bin = atob(b64data)
       const bytes = new Uint8Array(bin.length)
       for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
       const file = new File([bytes], path.split('/').pop(), { type: 'image/jpeg' })
 
-      console.log('[upload] uploading', path, Math.round(file.size/1024), 'KB')
+      console.log('[upload] mulai upload', path, Math.round(file.size/1024), 'KB')
 
-      const { error } = await supabase.storage
+      // Timeout 8 detik — kalau Supabase Storage gantung, gagalkan dan fallback
+      const uploadPromise = supabase.storage
         .from('foto-absensi')
         .upload(path, file, { contentType: 'image/jpeg', upsert: true })
 
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Upload timeout 8s')), 8000)
+      )
+
+      const { error } = await Promise.race([uploadPromise, timeoutPromise])
+
       if (error) {
-        console.error('[upload] error:', error.message)
+        console.error('[upload] gagal:', error.message)
         return null
       }
 
       const { data } = supabase.storage.from('foto-absensi').getPublicUrl(path)
-      console.log('[upload] ok:', data.publicUrl)
+      console.log('[upload] berhasil:', data.publicUrl)
       return data.publicUrl
     } catch(e) {
-      console.error('[upload] exception:', e)
+      console.error('[upload] exception/timeout:', e.message)
       return null
     }
   }
 
   const handleClockIn = async (foto, loc) => {
-    console.log('[clockIn] foto type:', typeof foto, 'starts:', foto?.slice(0,30), 'length:', foto?.length)
-    console.log('[clockIn] loc:', loc)
+    console.log('[clockIn] mulai, foto length:', foto?.length)
     setLoading(true)
-    showToast('⏳ Mengupload foto...')
+    showToast('⏳ Menyimpan absensi...')
     const { jam: jamStr, tanggal: tanggalWIB } = getWIBString()
     const jamWajib = emp.jam_masuk_wajib || '08:00'
     const [wajibH, wajibM] = jamWajib.split(':').map(Number)
@@ -483,20 +487,24 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
     const lokasiCoords = loc?.coords || null
 
     const path = `${tanggalWIB}/${user.nip}_masuk_${jamStr.replace(':','')}.jpg`
+    console.log('[clockIn] uploading...')
     const fotoUrl = await uploadFoto(foto, path)
+    console.log('[clockIn] upload selesai, fotoUrl:', fotoUrl ? 'OK (storage)' : 'fallback base64')
 
+    console.log('[clockIn] insert ke database...')
     const { error } = await supabase.from('attendance').insert({
       nip:user.nip, nama:user.nama, tanggal:tanggalWIB, jam_masuk:jamStr,
       status_kehadiran:status, menit_terlambat:menit,
       lokasi_masuk:lokasiLabel, koordinat_masuk:lokasiCoords,
-      foto_masuk: fotoUrl || foto,  // fallback base64 jika storage gagal
+      foto_masuk: fotoUrl || foto,
       status_validasi:'MENUNGGU'
     })
+    console.log('[clockIn] insert hasil, error:', error)
     if (!error) {
       await supabase.from('audit_log').insert({ user_name:user.nama, nip:user.nip, aktivitas:'Clock In', keterangan:`${jamStr} WIB · ${lokasiLabel}` })
       showToast(fotoUrl ? '✅ Clock In berhasil!' : '✅ Clock In berhasil (foto lokal)')
       refreshData()
-    } else { console.error(error); showToast('❌ Gagal clock in') }
+    } else { console.error('[clockIn] DB error:', error); showToast('❌ Gagal clock in') }
     setLoading(false)
   }
 
