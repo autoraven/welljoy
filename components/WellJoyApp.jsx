@@ -1135,7 +1135,17 @@ const HRDKaryawan = ({ user, showToast, dbData, refreshData }) => {
                       <p style={{ fontSize:10,fontWeight:700,color:'#2E7D32',margin:'0 0 6px' }}>🟢 Clock In</p>
                       {a.foto_masuk && (
                         <a href={a.foto_masuk} target="_blank" rel="noreferrer">
-                          <img src={a.foto_masuk} alt="masuk" style={{ width:'100%',borderRadius:8,maxHeight:80,objectFit:'cover',display:'block',marginBottom:6 }}/>
+                          <img
+                            src={a.foto_masuk}
+                            alt="masuk"
+                            style={{ width:'100%',borderRadius:8,maxHeight:80,objectFit:'cover',display:'block',marginBottom:6,background:'#ddd' }}
+                            onError={(e)=>{
+                              console.error('[img] gagal load foto_masuk:', a.foto_masuk)
+                              e.target.style.display='none'
+                              e.target.nextSibling.style.display='block'
+                            }}
+                          />
+                          <p style={{ fontSize:9,color:'#E53935',margin:'0 0 4px',display:'none',wordBreak:'break-all' }}>⚠️ Gagal load: {a.foto_masuk?.slice(0,40)}...</p>
                         </a>
                       )}
                       {a.lokasi_masuk && <p style={{ fontSize:10,color:'#388E3C',margin:0,lineHeight:1.3 }}>📍 {a.lokasi_masuk}</p>}
