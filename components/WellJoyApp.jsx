@@ -443,39 +443,50 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
     return { jam:`${hh}:${mm}`, tanggal:tgl }
   }
 
-  // ── Upload foto ke Supabase Storage ──
+  // ── Upload foto ke Supabase Storage (via REST API langsung, bypass SDK) ──
   const uploadFoto = async (base64, path) => {
     try {
       if (!base64?.startsWith('data:image')) { console.warn('[upload] base64 invalid'); return null }
       const b64data = base64.split(',')[1]
       if (!b64data || b64data.length < 200) { console.warn('[upload] base64 kosong'); return null }
 
+      // base64 → binary Uint8Array
       const bin = atob(b64data)
       const bytes = new Uint8Array(bin.length)
       for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
-      const file = new File([bytes], path.split('/').pop(), { type: 'image/jpeg' })
 
-      console.log('[upload] mulai upload', path, Math.round(file.size/1024), 'KB')
+      console.log('[upload] mulai upload', path, Math.round(bytes.length/1024), 'KB')
 
-      // Timeout 8 detik — kalau Supabase Storage gantung, gagalkan dan fallback
-      const uploadPromise = supabase.storage
-        .from('foto-absensi')
-        .upload(path, file, { contentType: 'image/jpeg', upsert: true })
+      const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL
+      const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+      const uploadUrl = `${SUPABASE_URL}/storage/v1/object/foto-absensi/${path}`
+
+      const uploadPromise = fetch(uploadUrl, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${SUPABASE_KEY}`,
+          'apikey': SUPABASE_KEY,
+          'Content-Type': 'image/jpeg',
+          'x-upsert': 'true',
+        },
+        body: bytes, // kirim binary murni, BUKAN FormData/File
+      })
 
       const timeoutPromise = new Promise((_, reject) =>
         setTimeout(() => reject(new Error('Upload timeout 8s')), 8000)
       )
 
-      const { error } = await Promise.race([uploadPromise, timeoutPromise])
+      const res = await Promise.race([uploadPromise, timeoutPromise])
 
-      if (error) {
-        console.error('[upload] gagal:', error.message)
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '')
+        console.error('[upload] gagal, status:', res.status, errText)
         return null
       }
 
-      const { data } = supabase.storage.from('foto-absensi').getPublicUrl(path)
-      console.log('[upload] berhasil:', data.publicUrl)
-      return data.publicUrl
+      const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/foto-absensi/${path}`
+      console.log('[upload] berhasil:', publicUrl)
+      return publicUrl
     } catch(e) {
       console.error('[upload] exception/timeout:', e.message)
       return null
