@@ -434,6 +434,15 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
   const myAtt = dbData.attendance.filter(a=>a.nip===user.nip).slice(0,3)
   const emp = dbData.karyawan.find(k=>k.nip===user.nip)||user
 
+  // ── Helper waktu WIB untuk handleClockIn/Out ──
+  const getWIBString = (d = new Date()) => {
+    const w = toWIB(d)
+    const hh = String(w.getHours()).padStart(2,'0')
+    const mm = String(w.getMinutes()).padStart(2,'0')
+    const tgl = `${w.getFullYear()}-${String(w.getMonth()+1).padStart(2,'0')}-${String(w.getDate()).padStart(2,'0')}`
+    return { jam:`${hh}:${mm}`, tanggal:tgl }
+  }
+
   // ── Upload foto ke Supabase Storage ──
   const uploadFoto = async (base64, path) => {
     try {
