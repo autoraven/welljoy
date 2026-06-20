@@ -498,7 +498,13 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
     setLoading(true)
     showToast('⏳ Menyimpan absensi...')
     const { jam: jamStr, tanggal: tanggalWIB } = getWIBString()
-    const jamWajib = emp.jam_masuk_wajib || '08:00'
+
+    // Tentukan nama hari (senin/selasa/.../sabtu/minggu) dari tanggal WIB
+    const hariIdx = toWIB(new Date(`${tanggalWIB}T00:00:00`)).getDay() // 0=minggu,1=senin,...6=sabtu
+    const namaHari = ['minggu','senin','selasa','rabu','kamis','jumat','sabtu'][hariIdx]
+
+    // Ambil jam wajib sesuai hari ini, fallback ke default 08:00
+    const jamWajib = emp[`jam_masuk_${namaHari}`] || emp.jam_masuk_wajib || '08:00'
     const [wajibH, wajibM] = jamWajib.split(':').map(Number)
     const [nowH, nowM] = jamStr.split(':').map(Number)
     const menit  = Math.max(0, (nowH*60+nowM) - (wajibH*60+wajibM))
@@ -521,8 +527,12 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
     })
     console.log('[clockIn] insert hasil, error:', error)
     if (!error) {
-      await supabase.from('audit_log').insert({ user_name:user.nama, nip:user.nip, aktivitas:'Clock In', keterangan:`${jamStr} WIB · ${lokasiLabel}` })
-      showToast(fotoUrl ? '✅ Clock In berhasil!' : '✅ Clock In berhasil (foto lokal)')
+      await supabase.from('audit_log').insert({ user_name:user.nama, nip:user.nip, aktivitas:'Clock In', keterangan:`${jamStr} WIB · ${lokasiLabel}${menit>0?` · Telat ${menit} menit`:''}` })
+      if (menit > 0) {
+        showToast(`⚠️ Clock In berhasil — Telat ${menit} menit`)
+      } else {
+        showToast('✅ Clock In berhasil — Tepat waktu!')
+      }
       refreshData()
     } else { console.error('[clockIn] DB error:', error); showToast('❌ Gagal clock in') }
     setLoading(false)
@@ -540,6 +550,13 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
     const lokasiLabel  = loc?.label  || 'Tidak diketahui'
     const lokasiCoords = loc?.coords || null
 
+    // Jam keluar wajib sesuai hari
+    const hariIdx = toWIB(new Date(`${tanggalWIB}T00:00:00`)).getDay()
+    const namaHari = ['minggu','senin','selasa','rabu','kamis','jumat','sabtu'][hariIdx]
+    const jamKeluarWajib = emp[`jam_keluar_${namaHari}`] || emp.jam_keluar_wajib || '16:40'
+    const [wkH, wkM] = jamKeluarWajib.split(':').map(Number)
+    const menitPulangCepat = Math.max(0, (wkH*60+wkM) - (kH*60+kM))
+
     const path = `${tanggalWIB}/${user.nip}_keluar_${jamStr.replace(':','')}.jpg`
     const fotoUrl = await uploadFoto(foto, path)
 
@@ -552,7 +569,13 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
     }).eq('id', todayAtt.id)
     if (!error) {
       await supabase.from('audit_log').insert({ user_name:user.nama, nip:user.nip, aktivitas:'Clock Out', keterangan:`${jamStr} WIB · ${lokasiLabel}` })
-      showToast(fotoUrl ? '✅ Clock Out berhasil!' : '✅ Clock Out berhasil (foto lokal)')
+      if (menitPulangCepat > 0) {
+        showToast(`⚠️ Clock Out berhasil — Pulang ${menitPulangCepat} menit lebih awal`)
+      } else if (lemburJam > 0) {
+        showToast(`✅ Clock Out berhasil — Lembur ${lemburJam.toFixed(1)} jam`)
+      } else {
+        showToast('✅ Clock Out berhasil!')
+      }
       refreshData()
     } else { console.error(error); showToast('❌ Gagal clock out') }
     setLoading(false)
@@ -607,7 +630,11 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
               <div style={{ width:36,height:36,borderRadius:10,background:STATUS_COLOR[a.status_kehadiran]?.bg||'#f5f5f5',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0 }}>
                 <span style={{ fontSize:11,fontWeight:700,color:STATUS_COLOR[a.status_kehadiran]?.text }}>{a.tanggal?.slice(8,10)}</span>
               </div>
-              <div style={{ flex:1 }}><p style={{ fontSize:12,fontWeight:600,margin:0,color:'#333' }}>{a.tanggal}</p><p style={{ fontSize:11,color:'#aaa',margin:0 }}>{a.jam_masuk||'-'} → {a.jam_keluar||'-'}</p></div>
+              <div style={{ flex:1 }}>
+                <p style={{ fontSize:12,fontWeight:600,margin:0,color:'#333' }}>{a.tanggal}</p>
+                <p style={{ fontSize:11,color:'#aaa',margin:0 }}>{a.jam_masuk||'-'} → {a.jam_keluar||'-'}</p>
+                {a.menit_terlambat>0 && <p style={{ fontSize:10,color:'#E53935',fontWeight:700,margin:'2px 0 0' }}>⏰ Telat {a.menit_terlambat} menit</p>}
+              </div>
               <Chip status={a.status_kehadiran}/>
             </div>
           ))}
@@ -984,17 +1011,25 @@ const HRDKaryawan = ({ user, showToast, dbData, refreshData }) => {
 
   const saveEdit = async()=>{
     setLoadingSave(true)
+    const hariList = ['senin','selasa','rabu','kamis','jumat','sabtu']
+    const jadwalUpdate = {}
+    hariList.forEach(h=>{
+      jadwalUpdate[`jam_masuk_${h}`]  = editForm[`jam_masuk_${h}`]  || emp.jam_masuk_wajib  || '08:00'
+      jadwalUpdate[`jam_keluar_${h}`] = editForm[`jam_keluar_${h}`] || emp.jam_keluar_wajib || '16:40'
+    })
     const {error} = await supabase.from('master_karyawan').update({
       nama:editForm.nama, email:editForm.email, no_hp:editForm.no_hp,
       jabatan:editForm.jabatan, divisi:editForm.divisi, status:editForm.status,
       sisa_izin:Number(editForm.sisa_izin)||0, nik:editForm.nik, alamat:editForm.alamat, atasan:editForm.atasan,
-      jam_masuk_wajib:editForm.jam_masuk_wajib||'08:00',
+      jam_masuk_wajib: jadwalUpdate.jam_masuk_senin,    // backward-compat default
+      jam_keluar_wajib: jadwalUpdate.jam_keluar_senin,
+      ...jadwalUpdate,
       gaji_pokok:Number(editForm.gaji_pokok)||0, tunjangan_jabatan:Number(editForm.tunjangan_jabatan)||0,
       tunjangan_transport:Number(editForm.tunjangan_transport)||0, tunjangan_makan:Number(editForm.tunjangan_makan)||0,
       bpjs_kesehatan:Number(editForm.bpjs_kesehatan)||0, bpjs_ketenagakerjaan:Number(editForm.bpjs_ketenagakerjaan)||0, pph21:Number(editForm.pph21)||0,
     }).eq('nip',selectedNIP)
     if(!error){ await supabase.from('audit_log').insert({ user_name:user.nama,nip:user.nip,aktivitas:`Edit data ${emp?.nama}`,keterangan:'' }); showToast('✅ Data disimpan!'); setEditMode(false); refreshData() }
-    else showToast('❌ Gagal menyimpan')
+    else { console.error(error); showToast('❌ Gagal menyimpan') }
     setLoadingSave(false)
   }
 
@@ -1081,18 +1116,49 @@ const HRDKaryawan = ({ user, showToast, dbData, refreshData }) => {
                   {editMode&&k!=='nip'?efv(k):<span style={{ fontWeight:600,color:'#333',textAlign:'right',flex:1,marginLeft:8 }}>{emp[k]||'-'}</span>}
                 </div>
               ))}
-              {/* Jam Masuk Wajib per karyawan */}
+              {/* Jadwal Jam Kerja per Hari */}
               <div style={{ marginTop:16,padding:14,borderRadius:14,background:'#E8F5E9',border:'1px solid #C8E6C9' }}>
-                <p style={{ fontSize:11,fontWeight:700,color:'#2E7D32',margin:'0 0 10px' }}>⏰ PENGATURAN JAM KERJA</p>
-                <div style={{ display:'flex',justifyContent:'space-between',alignItems:'center',fontSize:13 }}>
-                  <span style={{ color:'#555' }}>Jam Masuk Wajib</span>
-                  {editMode
-                    ? <input type="time" value={editForm.jam_masuk_wajib||'08:00'} onChange={e=>setEditForm({...editForm,jam_masuk_wajib:e.target.value})} style={{ border:'1px solid #F5A623',borderRadius:8,padding:'4px 8px',fontSize:13,outline:'none' }}/>
-                    : <span style={{ fontWeight:700,color:'#2E7D32',fontSize:15 }}>{emp.jam_masuk_wajib||'08:00'}</span>
-                  }
-                </div>
-                <p style={{ fontSize:11,color:'#81C784',margin:'6px 0 0' }}>Keterlambatan dihitung dari jam ini</p>
+                <p style={{ fontSize:11,fontWeight:700,color:'#2E7D32',margin:'0 0 12px' }}>⏰ JADWAL KERJA PER HARI</p>
+                {['Senin','Selasa','Rabu','Kamis','Jumat','Sabtu'].map(hari=>{
+                  const keyMasuk  = `jam_masuk_${hari.toLowerCase()}`
+                  const keyKeluar = `jam_keluar_${hari.toLowerCase()}`
+                  const defMasuk  = emp.jam_masuk_wajib  || '08:00'
+                  const defKeluar = emp.jam_keluar_wajib || '16:40'
+                  return (
+                    <div key={hari} style={{ display:'flex',alignItems:'center',gap:8,padding:'6px 0',borderBottom:'1px solid #DCEDC8' }}>
+                      <span style={{ width:60,fontSize:12,fontWeight:700,color:'#388E3C',flexShrink:0 }}>{hari}</span>
+                      {editMode ? (
+                        <>
+                          <input type="time" value={editForm[keyMasuk] ?? defMasuk} onChange={e=>setEditForm({...editForm,[keyMasuk]:e.target.value})}
+                            style={{ flex:1,border:'1px solid #F5A623',borderRadius:8,padding:'4px 6px',fontSize:12,outline:'none' }}/>
+                          <span style={{ color:'#aaa',fontSize:11 }}>—</span>
+                          <input type="time" value={editForm[keyKeluar] ?? defKeluar} onChange={e=>setEditForm({...editForm,[keyKeluar]:e.target.value})}
+                            style={{ flex:1,border:'1px solid #F5A623',borderRadius:8,padding:'4px 6px',fontSize:12,outline:'none' }}/>
+                        </>
+                      ) : (
+                        <span style={{ flex:1,textAlign:'right',fontSize:13,fontWeight:600,color:'#2E7D32' }}>
+                          {emp[keyMasuk] ?? defMasuk} – {emp[keyKeluar] ?? defKeluar}
+                        </span>
+                      )}
+                    </div>
+                  )
+                })}
+                <p style={{ fontSize:11,color:'#81C784',margin:'8px 0 0' }}>Keterlambatan dihitung dari jam masuk sesuai hari tersebut</p>
+                <p style={{ fontSize:10,color:'#A5D6A7',margin:'2px 0 0' }}>Minggu otomatis libur (tidak ada jadwal)</p>
               </div>
+              {editMode && (
+                <button onClick={()=>{
+                  // Terapkan jam Senin ke semua hari kerja sekaligus
+                  const m = editForm.jam_masuk_senin || emp.jam_masuk_wajib || '08:00'
+                  const k = editForm.jam_keluar_senin || emp.jam_keluar_wajib || '16:40'
+                  const upd = {}
+                  ;['selasa','rabu','kamis','jumat','sabtu'].forEach(h=>{ upd[`jam_masuk_${h}`]=m; upd[`jam_keluar_${h}`]=k })
+                  setEditForm({...editForm, ...upd, jam_masuk_senin:m, jam_keluar_senin:k})
+                  showToast('✅ Jam Senin disalin ke semua hari')
+                }} style={{ marginTop:8,width:'100%',padding:'8px 0',background:'#FFF8E1',border:'1px dashed #F5A623',borderRadius:10,fontSize:12,fontWeight:700,color:'#F57F17',cursor:'pointer' }}>
+                  📋 Samakan semua hari dengan jam Senin
+                </button>
+              )}
               <div style={{ marginTop:16,padding:14,borderRadius:14,background:'#F9F9F9' }}>
                 <p style={{ fontSize:11,fontWeight:700,color:'#aaa',margin:'0 0 10px' }}>INFO GAJI</p>
                 {[['Gaji Pokok','gaji_pokok'],['Tunjangan Jabatan','tunjangan_jabatan'],['Tunjangan Transport','tunjangan_transport'],['Tunjangan Makan','tunjangan_makan'],['BPJS Kesehatan','bpjs_kesehatan'],['BPJS Ketenagakerjaan','bpjs_ketenagakerjaan'],['PPh 21','pph21']].map(([lbl,k])=>(
@@ -1169,7 +1235,12 @@ const HRDKaryawan = ({ user, showToast, dbData, refreshData }) => {
                       {!a.foto_keluar && !a.lokasi_keluar && <p style={{ fontSize:10,color:'#ccc',margin:0 }}>{a.jam_keluar?'Tidak ada data':'Belum clock out'}</p>}
                     </div>
                   </div>
-                  {a.menit_terlambat>0 && <p style={{ fontSize:11,color:'#F57F17',fontWeight:600,margin:'8px 0 0' }}>⚠️ Terlambat {a.menit_terlambat} menit</p>}
+                  {a.menit_terlambat>0 && (
+                    <div style={{ marginTop:8,padding:'8px 12px',background:'#FFEBEE',borderRadius:10,border:'1px solid #FFCDD2',display:'flex',alignItems:'center',gap:8 }}>
+                      <span style={{ fontSize:16 }}>⏰</span>
+                      <span style={{ fontSize:12,fontWeight:700,color:'#C62828' }}>Terlambat {a.menit_terlambat} menit</span>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -1336,7 +1407,15 @@ const HRDAbsensi = ({ user, showToast, dbData, refreshData }) => {
                         : <p style={{ fontSize:11,color:'#ccc',marginTop:6 }}>Tidak ada foto</p>}
                     </div>
                   </div>
-                  {a.menit_terlambat>0 && <p style={{ fontSize:12,color:'#F57F17',fontWeight:600,margin:'10px 0 0' }}>⚠️ Terlambat {a.menit_terlambat} menit</p>}
+                  {a.menit_terlambat>0 && (
+                    <div style={{ marginTop:10,padding:'10px 14px',background:'#FFEBEE',borderRadius:12,border:'1px solid #FFCDD2',display:'flex',alignItems:'center',gap:10 }}>
+                      <span style={{ fontSize:20 }}>⏰</span>
+                      <div>
+                        <p style={{ fontSize:13,fontWeight:800,color:'#C62828',margin:0 }}>Terlambat {a.menit_terlambat} menit</p>
+                        <p style={{ fontSize:10,color:'#E57373',margin:0 }}>Jam masuk: {a.jam_masuk}</p>
+                      </div>
+                    </div>
+                  )}
                 </Card>
               )
             })
