@@ -744,24 +744,77 @@ const EmpAjukanIzin = ({ user, showToast, onBack, refreshData, dbData }) => {
   const set = k=>e=>setForm({...form,[k]:e.target.value})
   const hari = ()=>{ if(!form.mulai||!form.selesai) return 0; const d=Math.ceil((new Date(form.selesai)-new Date(form.mulai))/86400000)+1; return d>0?d:0 }
 
+  // Upload lampiran (gambar/PDF) ke Supabase Storage via REST API langsung
+  const uploadLampiran = async (file) => {
+    try {
+      const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL
+      const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+      const ext = file.name.split('.').pop() || 'bin'
+      const safeName = `${Date.now()}_${user.nip}.${ext}`
+      const path = `${user.nip}/${safeName}`
+      const uploadUrl = `${SUPABASE_URL}/storage/v1/object/lampiran-izin/${path}`
+
+      const arrayBuffer = await file.arrayBuffer()
+      const bytes = new Uint8Array(arrayBuffer)
+
+      console.log('[uploadLampiran] mulai', path, Math.round(bytes.length/1024), 'KB', file.type)
+
+      const uploadPromise = fetch(uploadUrl, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${SUPABASE_KEY}`,
+          'apikey': SUPABASE_KEY,
+          'Content-Type': file.type || 'application/octet-stream',
+          'x-upsert': 'true',
+        },
+        body: bytes,
+      })
+      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 10000))
+      const res = await Promise.race([uploadPromise, timeoutPromise])
+
+      if (!res.ok) {
+        const t = await res.text().catch(()=> '')
+        console.error('[uploadLampiran] gagal status:', res.status, t)
+        return null
+      }
+
+      const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/lampiran-izin/${path}`
+      console.log('[uploadLampiran] berhasil:', publicUrl)
+      return publicUrl
+    } catch(e) {
+      console.error('[uploadLampiran] exception:', e.message)
+      return null
+    }
+  }
+
   const submit = async()=>{
     setErr('')
     if(!form.jenis||!form.mulai||!form.selesai||!form.alasan){setErr('Semua field wajib diisi');return}
     if(!lampiran){setErr('Lampiran bukti wajib diunggah');return}
     setLoading(true)
+    showToast('⏳ Mengupload lampiran...')
     const emp = dbData.karyawan.find(k=>k.nip===user.nip)||user
+
+    const lampiranUrl = await uploadLampiran(lampiran)
+    if (!lampiranUrl) {
+      setErr('Gagal mengupload lampiran. Coba lagi atau gunakan file yang lebih kecil.')
+      setLoading(false)
+      return
+    }
+
     const {error} = await supabase.from('izin').insert({
       nip:user.nip, nama:user.nama, jabatan:emp.jabatan||'',
       jenis_izin:form.jenis, tanggal_mulai:form.mulai, tanggal_selesai:form.selesai,
       jumlah_hari:hari(), keterangan:form.alasan, status:'MENUNGGU',
       diajukan_pada:new Date().toISOString().split('T')[0],
-      lampiran_nama:lampiran.name
+      lampiran_nama: lampiran.name,
+      lampiran_url: lampiranUrl
     })
     if(!error){
       await supabase.from('audit_log').insert({ user_name:user.nama,nip:user.nip,aktivitas:`Pengajuan izin ${form.mulai}–${form.selesai}`,keterangan:`${form.jenis}, ${hari()} hari` })
       await supabase.from('notifications').insert({ nip:'20001',type:'APPROVAL',message:`${user.nama} mengajukan izin ${hari()} hari (${form.jenis})` })
       setOk(true); refreshData()
-    } else setErr('Gagal mengirim. Coba lagi.')
+    } else { console.error(error); setErr('Gagal mengirim. Coba lagi.') }
     setLoading(false)
   }
 
@@ -815,12 +868,17 @@ const EmpAjukanIzin = ({ user, showToast, onBack, refreshData, dbData }) => {
             </div>
             <BtnGrad small onClick={()=>fileRef.current.click()}>{lampiran?'Ganti':'Upload'}</BtnGrad>
           </div>
-          <input ref={fileRef} type="file" accept="image/*,.pdf" style={{ display:'none' }} onChange={e=>{ if(e.target.files[0]) setLampiran(e.target.files[0]) }}/>
+          <input ref={fileRef} type="file" accept="image/*,.pdf" style={{ display:'none' }} onChange={e=>{
+            const f = e.target.files[0]
+            if (!f) return
+            if (f.size > 5 * 1024 * 1024) { showToast('❌ Ukuran file maksimal 5MB'); return }
+            setLampiran(f)
+          }}/>
           {lampiran
             ? <div style={{ display:'flex',alignItems:'center',gap:10,background:'#F0FFF4',padding:'10px 14px',borderRadius:10 }}><span>📄</span><span style={{ fontSize:12,fontWeight:600,color:'#2E7D32',flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap' }}>{lampiran.name}</span></div>
             : <div style={{ border:'2px dashed #e0e0e0',borderRadius:12,padding:20,textAlign:'center',color:'#ccc',fontSize:13 }}>Belum ada lampiran</div>}
         </Card>
-        <BtnGrad onClick={submit} disabled={loading}>{loading?'Mengirim...':'Ajukan Izin'}</BtnGrad>
+        <BtnGrad onClick={submit} disabled={loading}>{loading?'Mengupload & mengirim...':'Ajukan Izin'}</BtnGrad>
       </div>
     </div>
   )
@@ -1535,9 +1593,18 @@ const HRDApproval = ({ user, showToast, dbData, refreshData }) => {
               <p style={{ fontSize:11,fontWeight:700,color:'#1565C0',padding:'8px 14px',background:'#E3F2FD',margin:0 }}>📎 Lampiran: {selectedItem.lampiran_nama}</p>
               {selectedItem.lampiran_url
                 ? <div style={{ padding:12 }}>
-                    <img src={selectedItem.lampiran_url} alt="lampiran" style={{ width:'100%',borderRadius:10,cursor:'pointer',border:'1px solid #e0e0e0' }} onClick={()=>setPreviewUrl(selectedItem.lampiran_url)}/>
+                    {/\.pdf$/i.test(selectedItem.lampiran_nama) ? (
+                      <div style={{ textAlign:'center',padding:'24px 12px',background:'#F9F9F9',borderRadius:10 }}>
+                        <span style={{ fontSize:40 }}>📄</span>
+                        <p style={{ fontSize:13,fontWeight:600,color:'#555',margin:'8px 0 0' }}>File PDF</p>
+                      </div>
+                    ) : (
+                      <img src={selectedItem.lampiran_url} alt="lampiran" style={{ width:'100%',borderRadius:10,cursor:'pointer',border:'1px solid #e0e0e0' }} onClick={()=>setPreviewUrl(selectedItem.lampiran_url)}/>
+                    )}
                     <div style={{ display:'flex',gap:8,marginTop:10 }}>
-                      <button onClick={()=>setPreviewUrl(selectedItem.lampiran_url)} style={{ flex:1,padding:'10px 0',background:'#E3F2FD',border:'none',borderRadius:10,fontSize:12,fontWeight:700,color:'#1565C0',cursor:'pointer' }}>👁️ Preview</button>
+                      {!/\.pdf$/i.test(selectedItem.lampiran_nama) && (
+                        <button onClick={()=>setPreviewUrl(selectedItem.lampiran_url)} style={{ flex:1,padding:'10px 0',background:'#E3F2FD',border:'none',borderRadius:10,fontSize:12,fontWeight:700,color:'#1565C0',cursor:'pointer' }}>👁️ Preview</button>
+                      )}
                       <a href={selectedItem.lampiran_url} target="_blank" rel="noreferrer" style={{ flex:1,display:'flex',alignItems:'center',justifyContent:'center',padding:'10px 0',background:'#E8F5E9',borderRadius:10,fontSize:12,fontWeight:700,color:'#2E7D32',textDecoration:'none' }}>⬇️ Download</a>
                     </div>
                   </div>
