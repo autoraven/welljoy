@@ -1098,13 +1098,33 @@ const HRDKaryawan = ({ user, showToast, dbData, refreshData }) => {
     showToast('✅ Dihapus!'); setSelectedNIP(null); setConfirmDel(false); refreshData()
   }
 
+  const [addRole, setAddRole] = useState('EMPLOYEE')
+
   const handleAdd = async()=>{
     if(!addForm.NIP||!addForm.Nama){showToast('NIP dan Nama wajib');return}
-    const {error:e1} = await supabase.from('users').insert({ nip:addForm.NIP,nama:addForm.Nama,email:addForm.Email,no_hp:addForm.NoHP,password:'password123',role:'EMPLOYEE',status:'aktif' })
+    const {error:e1} = await supabase.from('users').insert({ nip:addForm.NIP,nama:addForm.Nama,email:addForm.Email,no_hp:addForm.NoHP,password:'password123',role:addRole,status:'aktif' })
     if(e1){showToast('❌ NIP sudah terdaftar');return}
-    await supabase.from('master_karyawan').insert({ nip:addForm.NIP,nama:addForm.Nama,jabatan:addForm.Jabatan,divisi:addForm.Divisi,email:addForm.Email,no_hp:addForm.NoHP,status:'aktif',sisa_izin:12,gaji_pokok:5000000,tunjangan_jabatan:1000000,tunjangan_transport:500000,tunjangan_makan:750000,bpjs_kesehatan:150000,bpjs_ketenagakerjaan:200000,pph21:1050000,tanggal_masuk:new Date().toISOString().split('T')[0],atasan:user.nama,lembur_per_jam:45000,potongan_terlambat_per_menit:5000 })
-    await supabase.from('audit_log').insert({ user_name:user.nama,nip:user.nip,aktivitas:`Tambah karyawan ${addForm.Nama}`,keterangan:'' })
-    showToast('✅ Ditambahkan!'); setShowAdd(false); setAddForm({ NIP:'',Nama:'',Jabatan:'',Divisi:'',Email:'',NoHP:'' }); refreshData()
+    if (addRole === 'EMPLOYEE') {
+      await supabase.from('master_karyawan').insert({
+        nip:addForm.NIP,nama:addForm.Nama,jabatan:addForm.Jabatan,divisi:addForm.Divisi,email:addForm.Email,no_hp:addForm.NoHP,status:'aktif',
+        sisa_izin:12,gaji_pokok:5000000,tunjangan_jabatan:1000000,tunjangan_transport:500000,tunjangan_makan:750000,
+        bpjs_kesehatan:150000,bpjs_ketenagakerjaan:200000,pph21:1050000,tanggal_masuk:new Date().toISOString().split('T')[0],
+        atasan:user.nama,lembur_per_jam:45000,potongan_terlambat_per_menit:5000,
+        jam_masuk_wajib:'08:00',jam_keluar_wajib:'16:40',
+        jam_masuk_senin:'08:00',jam_keluar_senin:'16:40',
+        jam_masuk_selasa:'08:00',jam_keluar_selasa:'16:40',
+        jam_masuk_rabu:'08:00',jam_keluar_rabu:'16:40',
+        jam_masuk_kamis:'08:00',jam_keluar_kamis:'16:40',
+        jam_masuk_jumat:'08:00',jam_keluar_jumat:'16:40',
+        jam_masuk_sabtu:'08:00',jam_keluar_sabtu:'16:40',
+      })
+    }
+    await supabase.from('audit_log').insert({ user_name:user.nama,nip:user.nip,aktivitas:`Tambah akun ${addRole==='HRD'?'HRD':'karyawan'}: ${addForm.Nama}`,keterangan:`NIP ${addForm.NIP}` })
+    showToast(`✅ Akun ${addRole==='HRD'?'HRD':'karyawan'} ditambahkan!`)
+    setShowAdd(false)
+    setAddForm({ NIP:'',Nama:'',Jabatan:'',Divisi:'',Email:'',NoHP:'' })
+    setAddRole('EMPLOYEE')
+    refreshData()
   }
 
   const efv = k => <input value={editForm[k]??''} onChange={e=>setEditForm({...editForm,[k]:e.target.value})} style={{ flex:1,border:'1px solid #F5A623',borderRadius:8,padding:'4px 8px',fontSize:13,outline:'none',textAlign:'right' }}/>
@@ -1355,15 +1375,37 @@ const HRDKaryawan = ({ user, showToast, dbData, refreshData }) => {
       )}
 
       {showAdd && (
-        <Modal title="Tambah Karyawan" onClose={()=>setShowAdd(false)}>
-          {['NIP','Nama','Jabatan','Divisi','Email','NoHP'].map(k=>(
+        <Modal title="Tambah Akun Baru" onClose={()=>{ setShowAdd(false); setAddRole('EMPLOYEE') }}>
+          <div style={{ marginBottom:14 }}>
+            <label style={{ display:'block',fontSize:12,fontWeight:700,color:'#666',marginBottom:8 }}>Jenis Akun</label>
+            <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:10 }}>
+              {[['EMPLOYEE','👤','Karyawan'],['HRD','🧑‍💼','HRD']].map(([r,icon,lbl])=>(
+                <button key={r} onClick={()=>setAddRole(r)} style={{ padding:'12px 8px',borderRadius:12,border:`2px solid ${addRole===r?'#E53935':'#e0e0e0'}`,background:addRole===r?'#FFF5F5':'white',cursor:'pointer',fontWeight:700,fontSize:13,color:addRole===r?'#E53935':'#888' }}>
+                  {icon}<br/><span style={{ fontSize:12 }}>{lbl}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+          {['NIP','Nama'].map(k=>(
+            <div key={k} style={{ marginBottom:10 }}>
+              <label style={{ display:'block',fontSize:12,fontWeight:700,color:'#666',marginBottom:6 }}>{k}</label>
+              <input value={addForm[k]} onChange={e=>setAddForm({...addForm,[k]:e.target.value})} placeholder={k==='NIP'?'Bebas, mis: 30001':k} style={{ width:'100%',border:'1px solid #e0e0e0',borderRadius:10,padding:'10px 12px',fontSize:13,outline:'none',boxSizing:'border-box' }}/>
+            </div>
+          ))}
+          {addRole==='EMPLOYEE' && ['Jabatan','Divisi'].map(k=>(
+            <div key={k} style={{ marginBottom:10 }}>
+              <label style={{ display:'block',fontSize:12,fontWeight:700,color:'#666',marginBottom:6 }}>{k}</label>
+              <input value={addForm[k]} onChange={e=>setAddForm({...addForm,[k]:e.target.value})} placeholder={k} style={{ width:'100%',border:'1px solid #e0e0e0',borderRadius:10,padding:'10px 12px',fontSize:13,outline:'none',boxSizing:'border-box' }}/>
+            </div>
+          ))}
+          {['Email','NoHP'].map(k=>(
             <div key={k} style={{ marginBottom:10 }}>
               <label style={{ display:'block',fontSize:12,fontWeight:700,color:'#666',marginBottom:6 }}>{k}</label>
               <input value={addForm[k]} onChange={e=>setAddForm({...addForm,[k]:e.target.value})} placeholder={k} style={{ width:'100%',border:'1px solid #e0e0e0',borderRadius:10,padding:'10px 12px',fontSize:13,outline:'none',boxSizing:'border-box' }}/>
             </div>
           ))}
           <p style={{ fontSize:11,color:'#aaa',margin:'0 0 12px' }}>Password default: <strong>password123</strong></p>
-          <BtnGrad onClick={handleAdd}>Tambah Karyawan</BtnGrad>
+          <BtnGrad onClick={handleAdd}>Tambah Akun {addRole==='HRD'?'HRD':'Karyawan'}</BtnGrad>
         </Modal>
       )}
     </div>
@@ -1690,6 +1732,7 @@ const HRDMore = ({ user, showToast, onLogout, dbData, refreshData }) => {
           </button>
         ))}
         <button onClick={onLogout} style={{ padding:14,borderRadius:14,color:'#E53935',fontWeight:700,fontSize:14,border:'2px solid #FFCDD2',background:'white',cursor:'pointer',marginTop:4,width:'100%' }}>← Keluar</button>
+        <p style={{ textAlign:'center',fontSize:10,color:'#ddd',marginTop:8 }}>#gg</p>
       </div>
 
       {sub==='handbook' && (
@@ -1800,7 +1843,7 @@ const HRDNav = ({ active, onChange, dbData }) => {
 }
 
 // ─── LOGIN ────────────────────────────────────────────────────────────────────
-const LoginPage = ({ onLogin, onRegister }) => {
+const LoginPage = ({ onLogin }) => {
   const [nip, setNip] = useState('')
   const [pw, setPw] = useState('')
   const [showPw, setShowPw] = useState(false)
@@ -1843,66 +1886,8 @@ const LoginPage = ({ onLogin, onRegister }) => {
           </div>
         </div>
         <BtnGrad onClick={login} disabled={loading}>{loading?'Memverifikasi...':'Masuk Sekarang'}</BtnGrad>
-        <p style={{ textAlign:'center',fontSize:13,color:'#888',marginTop:16 }}>Belum punya akun? <button onClick={onRegister} style={{ background:'none',border:'none',color:'#F5A623',fontWeight:700,cursor:'pointer',fontSize:13 }}>Daftar</button></p>
-        <div style={{ marginTop:16,padding:12,borderRadius:12,background:'#F9F9F9',fontSize:12,color:'#aaa' }}>
-          <p style={{ fontWeight:700,color:'#777',margin:'0 0 6px' }}>Demo Accounts:</p>
-          <p style={{ margin:'0 0 4px' }}>👤 Karyawan: <strong>10001</strong> / password123</p>
-          <p style={{ margin:0 }}>🧑‍💼 HRD: <strong>20001</strong> / hrd123</p>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// ─── REGISTER ────────────────────────────────────────────────────────────────
-const RegisterPage = ({ onBack }) => {
-  const [form, setForm] = useState({ nip:'',nama:'',email:'',noHp:'',pw:'',konfirmasi:'' })
-  const [agree, setAgree] = useState(false)
-  const [err, setErr] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [ok, setOk] = useState(false)
-  const set = k=>e=>setForm({...form,[k]:e.target.value})
-  const submit = async()=>{
-    setErr('')
-    if(!form.nip||!form.nama||!form.email||!form.pw){setErr('Semua field wajib diisi');return}
-    if(form.pw.length<8){setErr('Password minimal 8 karakter');return}
-    if(form.pw!==form.konfirmasi){setErr('Password tidak cocok');return}
-    if(!agree){setErr('Harap setujui syarat & ketentuan');return}
-    setLoading(true)
-    const {data:emp} = await supabase.from('master_karyawan').select('nip').eq('nip',form.nip).maybeSingle()
-    if(!emp){setErr('NIP tidak ditemukan di sistem');setLoading(false);return}
-    const {error} = await supabase.from('users').update({ password:form.pw,email:form.email,no_hp:form.noHp }).eq('nip',form.nip)
-    if(error){setErr('Gagal memperbarui akun');setLoading(false);return}
-    await supabase.from('master_karyawan').update({ email:form.email,no_hp:form.noHp }).eq('nip',form.nip)
-    setOk(true); setLoading(false)
-  }
-  if(ok) return (
-    <div style={{ minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',padding:16,background:'#FBF5F5' }}>
-      <div style={{ background:'white',borderRadius:24,padding:32,width:'100%',maxWidth:360,textAlign:'center',boxShadow:'0 20px 60px rgba(0,0,0,0.10)' }}>
-        <div style={{ fontSize:48,marginBottom:12 }}>🎉</div>
-        <h2 style={{ fontWeight:700,margin:'0 0 8px' }}>Berhasil!</h2>
-        <p style={{ color:'#888',fontSize:13,marginBottom:24 }}>Akun telah dibuat. Silakan login.</p>
-        <BtnGrad onClick={onBack}>Masuk Sekarang</BtnGrad>
-      </div>
-    </div>
-  )
-  return (
-    <div style={{ minHeight:'100vh',padding:16,background:'#FBF5F5' }}>
-      <button onClick={onBack} style={{ color:'#E53935',fontSize:20,background:'none',border:'none',cursor:'pointer',paddingTop:16,paddingBottom:8,display:'block' }}>←</button>
-      <div style={{ display:'flex',flexDirection:'column',alignItems:'center',marginBottom:16 }}><WellJoyLogo size={80}/><h1 style={{ fontSize:20,fontWeight:800,margin:'4px 0 0' }}>Daftar <span style={{ color:'#E53935' }}>Akun</span></h1></div>
-      <div style={{ background:'white',borderRadius:24,padding:24,boxShadow:'0 20px 60px rgba(0,0,0,0.08)' }}>
-        {err&&<div style={{ marginBottom:12,background:'#FFF5F5',border:'1px solid #FFCDD2',color:'#C62828',fontSize:13,padding:'10px 14px',borderRadius:12 }}>{err}</div>}
-        {[['NIP','nip','NIP Anda'],['Nama','nama','Nama lengkap'],['Email','email','Email aktif'],['No. HP','noHp','Nomor HP'],['Password','pw','Min. 8 karakter'],['Konfirmasi Password','konfirmasi','Ulangi password']].map(([lbl,k,ph])=>(
-          <div key={k} style={{ marginBottom:10 }}>
-            <label style={{ display:'block',fontSize:12,fontWeight:700,color:'#666',marginBottom:6 }}>{lbl}</label>
-            <input type={k.includes('pw')||k==='konfirmasi'?'password':'text'} value={form[k]} onChange={set(k)} placeholder={ph} style={{ width:'100%',border:'1px solid #e0e0e0',borderRadius:12,padding:'10px 12px',fontSize:13,outline:'none',boxSizing:'border-box' }}/>
-          </div>
-        ))}
-        <label style={{ display:'flex',alignItems:'flex-start',gap:8,marginBottom:16,cursor:'pointer' }}>
-          <input type="checkbox" checked={agree} onChange={e=>setAgree(e.target.checked)} style={{ marginTop:2,width:16,height:16 }}/>
-          <span style={{ fontSize:12,color:'#666' }}>Saya menyetujui <span style={{ color:'#E53935' }}>Syarat & Ketentuan</span></span>
-        </label>
-        <BtnGrad onClick={submit} disabled={loading}>{loading?'Mendaftarkan...':'Daftar Sekarang'}</BtnGrad>
+        <p style={{ textAlign:'center',fontSize:11,color:'#ccc',marginTop:16 }}>Lupa password? Hubungi HRD</p>
+        <p style={{ textAlign:'center',fontSize:10,color:'#ddd',marginTop:20 }}>#gg</p>
       </div>
     </div>
   )
@@ -2001,8 +1986,7 @@ export default function WellJoyApp() {
     </div>
   )
 
-  if(screen==='login') return <LoginPage onLogin={handleLogin} onRegister={()=>setScreen('register')}/>
-  if(screen==='register') return <RegisterPage onBack={()=>setScreen('login')}/>
+  if(screen==='login') return <LoginPage onLogin={handleLogin}/>
 
   const isHRD = user?.role==='HRD'
   const commonProps = { user, showToast, dbData, refreshData:fetchData }
