@@ -6,6 +6,27 @@ import { supabase } from '../lib/supabase'
 const formatRp = n => `Rp ${Number(n).toLocaleString('id-ID')}`
 const BNAME = ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember']
 
+// ── Kirim/update 1 baris ke Google Sheets (Absensi atau Izin) ──
+// Dipakai di event clock-in, clock-out, ajukan izin, approve/tolak izin.
+// `sheet`: 'absensi' | 'izin'
+// `key`: kolom untuk mencocokkan baris lama (mis. {NIP, Tanggal} atau {ID})
+// `row`: nilai lengkap baris (key harus pakai nama kolom yang sama persis dengan header sheet)
+const logToSheet = async (sheet, key, row) => {
+  try {
+    const res = await fetch('/api/log-sheet', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sheet, key, row }),
+    })
+    const j = await res.json()
+    console.log(`[log-sheet:${sheet}] hasil:`, j)
+    return j
+  } catch (e) {
+    console.warn(`[log-sheet:${sheet}] gagal (diabaikan):`, e.message)
+    return null
+  }
+}
+
 const STATUS_COLOR = {
   HADIR:        { bg:'#E8F5E9', text:'#2E7D32', label:'Hadir' },
   TERLAMBAT:    { bg:'#FFF8E1', text:'#F57F17', label:'Terlambat' },
@@ -549,7 +570,7 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
   // Dipanggil "fire and forget" — kalau Drive gagal/lambat, tidak mengganggu proses utama
   const uploadToDrive = (base64, kategori, fileName, extraInfo = {}) => {
     try {
-      if (!base64?.startsWith('data:')) return
+      if (!base64?.startsWith('data:')) return Promise.resolve(null)
       // Convert base64 → Blob untuk dikirim sebagai FormData
       const [meta, data] = base64.split(',')
       const mime = meta.match(/data:(.*?);/)?.[1] || 'image/jpeg'
@@ -566,12 +587,13 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
       fd.append('kategori', kategori) // 'absensi' | 'izin'
       fd.append('fileName', fileName)
 
-      fetch('/api/upload-drive', { method:'POST', body: fd })
+      return fetch('/api/upload-drive', { method:'POST', body: fd })
         .then(r => r.json())
-        .then(j => console.log('[drive] backup hasil:', j))
-        .catch(e => console.warn('[drive] backup gagal (diabaikan):', e.message))
+        .then(j => { console.log('[drive] backup hasil:', j); return j?.webViewLink || null })
+        .catch(e => { console.warn('[drive] backup gagal (diabaikan):', e.message); return null })
     } catch(e) {
       console.warn('[drive] backup exception (diabaikan):', e.message)
+      return Promise.resolve(null)
     }
   }
 
@@ -605,8 +627,8 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
     const fotoUrl = await uploadFoto(foto, path)
     console.log('[clockIn] upload selesai, fotoUrl:', fotoUrl ? 'OK (storage)' : 'fallback base64')
 
-    // Backup ke Google Drive — non-blocking, tidak menunggu hasil
-    uploadToDrive(foto, 'absensi', `masuk_${jamStr.replace(':','')}.jpg`, { tanggal: tanggalWIB, nip: user.nip, nama: user.nama })
+    // Backup ke Google Drive — ditunggu hasilnya supaya link bisa dicatat ke Sheets
+    const driveLinkMasuk = await uploadToDrive(foto, 'absensi', `masuk_${jamStr.replace(':','')}.jpg`, { tanggal: tanggalWIB, nip: user.nip, nama: user.nama })
 
     console.log('[clockIn] insert ke database...')
     const { error } = await supabase.from('attendance').insert({
@@ -614,11 +636,17 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
       status_kehadiran:status, menit_terlambat:menit,
       lokasi_masuk:lokasiLabel, koordinat_masuk:lokasiCoords,
       foto_masuk: fotoUrl || foto,
+      foto_masuk_drive_link: driveLinkMasuk || null,
       status_validasi:'MENUNGGU'
     })
     console.log('[clockIn] insert hasil, error:', error)
     if (!error) {
       await supabase.from('audit_log').insert({ user_name:user.nama, nip:user.nip, aktivitas:'Clock In', keterangan:`${jamStr} WIB · ${lokasiLabel}${menit>0?` · Telat ${menit} menit`:''}` })
+      // Catat ke Google Sheets (baris baru, jam keluar masih kosong — akan di-update saat clock out)
+      logToSheet('absensi', { NIP:user.nip, Tanggal:tanggalWIB }, {
+        NIP:user.nip, Nama:user.nama, Tanggal:tanggalWIB, 'Jam Masuk':jamStr, 'Jam Keluar':'',
+        'Telat (menit)':menit, 'Foto Masuk':driveLinkMasuk||'', 'Foto Keluar':'',
+      })
       if (menit > 0) {
         showToast(`⚠️ Clock In berhasil — Telat ${menit} menit`)
       } else {
@@ -651,18 +679,26 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
     const path = `${tanggalWIB}/${user.nip}_keluar_${jamStr.replace(':','')}.jpg`
     const fotoUrl = await uploadFoto(foto, path)
 
-    // Backup ke Google Drive — non-blocking
-    uploadToDrive(foto, 'absensi', `keluar_${jamStr.replace(':','')}.jpg`, { tanggal: tanggalWIB, nip: user.nip, nama: user.nama })
+    // Backup ke Google Drive — ditunggu hasilnya supaya link bisa dicatat ke Sheets
+    const driveLinkKeluar = await uploadToDrive(foto, 'absensi', `keluar_${jamStr.replace(':','')}.jpg`, { tanggal: tanggalWIB, nip: user.nip, nama: user.nama })
 
     const { error } = await supabase.from('attendance').update({
       jam_keluar:jamStr,
       durasi:`${Math.floor(durMenit/60)}j ${durMenit%60}m`,
       jam_lembur:Math.round(lemburJam*100)/100,
       foto_keluar: fotoUrl || foto,
+      foto_keluar_drive_link: driveLinkKeluar || null,
       lokasi_keluar:lokasiLabel, koordinat_keluar:lokasiCoords
     }).eq('id', todayAtt.id)
     if (!error) {
       await supabase.from('audit_log').insert({ user_name:user.nama, nip:user.nip, aktivitas:'Clock Out', keterangan:`${jamStr} WIB · ${lokasiLabel}` })
+      // Update baris yang sama di Sheets (dicocokkan via NIP+Tanggal, dibuat saat clock in)
+      logToSheet('absensi', { NIP:user.nip, Tanggal:tanggalWIB }, {
+        NIP:user.nip, Nama:user.nama, Tanggal:tanggalWIB,
+        'Jam Masuk':todayAtt.jam_masuk, 'Jam Keluar':jamStr,
+        'Telat (menit)':todayAtt.menit_terlambat ?? 0,
+        'Foto Masuk':todayAtt.foto_masuk_drive_link||'', 'Foto Keluar':driveLinkKeluar||'',
+      })
       if (menitPulangCepat > 0) {
         showToast(`⚠️ Clock Out berhasil — Pulang ${menitPulangCepat} menit lebih awal`)
       } else if (lemburJam > 0) {
@@ -884,7 +920,7 @@ const EmpAjukanIzin = ({ user, showToast, onBack, refreshData, dbData }) => {
     }
   }
 
-  // Backup lampiran ke Drive — non-blocking, terima File langsung (bukan base64)
+  // Backup lampiran ke Drive — return Promise<link> supaya bisa dicatat ke Sheets
   const backupLampiranToDrive = (file, tanggalWIB) => {
     try {
       const fd = new FormData()
@@ -894,12 +930,13 @@ const EmpAjukanIzin = ({ user, showToast, onBack, refreshData, dbData }) => {
       fd.append('nama', user.nama)
       fd.append('kategori', 'izin')
       fd.append('fileName', file.name)
-      fetch('/api/upload-drive', { method:'POST', body: fd })
+      return fetch('/api/upload-drive', { method:'POST', body: fd })
         .then(r => r.json())
-        .then(j => console.log('[drive] backup lampiran:', j))
-        .catch(e => console.warn('[drive] backup lampiran gagal (diabaikan):', e.message))
+        .then(j => { console.log('[drive] backup lampiran:', j); return j?.webViewLink || null })
+        .catch(e => { console.warn('[drive] backup lampiran gagal (diabaikan):', e.message); return null })
     } catch(e) {
       console.warn('[drive] backup lampiran exception:', e.message)
+      return Promise.resolve(null)
     }
   }
 
@@ -918,24 +955,31 @@ const EmpAjukanIzin = ({ user, showToast, onBack, refreshData, dbData }) => {
       return
     }
 
-    // Backup ke Google Drive (non-blocking)
+    // Backup ke Google Drive — ditunggu hasilnya supaya link bisa dicatat ke Sheets
     const tanggalWIB = (() => {
       const w = new Date(new Date().toLocaleString('en-US', { timeZone:'Asia/Jakarta' }))
       return `${w.getFullYear()}-${String(w.getMonth()+1).padStart(2,'0')}-${String(w.getDate()).padStart(2,'0')}`
     })()
-    backupLampiranToDrive(lampiran, tanggalWIB)
+    const driveLinkLampiran = await backupLampiranToDrive(lampiran, tanggalWIB)
 
-    const {error} = await supabase.from('izin').insert({
+    const {data: inserted, error} = await supabase.from('izin').insert({
       nip:user.nip, nama:user.nama, jabatan:emp.jabatan||'',
       jenis_izin:form.jenis, tanggal_mulai:form.mulai, tanggal_selesai:form.selesai,
       jumlah_hari:hari(), keterangan:form.alasan, status:'MENUNGGU',
       diajukan_pada:new Date().toISOString().split('T')[0],
       lampiran_nama: lampiran.name,
-      lampiran_url: lampiranUrl
-    })
+      lampiran_url: lampiranUrl,
+      lampiran_drive_link: driveLinkLampiran || null,
+    }).select().single()
     if(!error){
       await supabase.from('audit_log').insert({ user_name:user.nama,nip:user.nip,aktivitas:`Pengajuan izin ${form.mulai}–${form.selesai}`,keterangan:`${form.jenis}, ${hari()} hari` })
       await supabase.from('notifications').insert({ nip:'20001',type:'APPROVAL',message:`${user.nama} mengajukan izin ${hari()} hari (${form.jenis})` })
+      // Catat ke Google Sheets, key = ID izin (unik), supaya nanti bisa di-update statusnya saat di-approve/ditolak
+      logToSheet('izin', { ID: inserted?.id }, {
+        ID: inserted?.id, NIP:user.nip, Nama:user.nama, 'Jenis Izin':form.jenis,
+        'Tanggal Mulai':form.mulai, 'Tanggal Selesai':form.selesai, 'Jumlah Hari':hari(),
+        Status:'MENUNGGU', Lampiran: driveLinkLampiran || lampiranUrl || '',
+      })
       setOk(true); refreshData()
     } else { console.error(error); setErr('Gagal mengirim. Coba lagi.') }
     setLoading(false)
@@ -1695,6 +1739,14 @@ const HRDApproval = ({ user, showToast, dbData, refreshData }) => {
       }
       await supabase.from('audit_log').insert({ user_name:user.nama,nip:user.nip,aktivitas:`${action==='approve'?'Setujui':'Tolak'} izin ${selectedItem.nama}`,keterangan:`${selectedItem.jenis_izin} ${selectedItem.jumlah_hari} hari` })
       await supabase.from('notifications').insert({ nip:selectedItem.nip,type:'IZIN',message:`Pengajuan izin Anda ${action==='approve'?'disetujui':'ditolak'} oleh HRD` })
+      // Update baris yang sama di Sheets (key = ID izin) dengan status terbaru
+      logToSheet('izin', { ID: selectedItem.id }, {
+        ID: selectedItem.id, NIP:selectedItem.nip, Nama:selectedItem.nama, 'Jenis Izin':selectedItem.jenis_izin,
+        'Tanggal Mulai':selectedItem.tanggal_mulai, 'Tanggal Selesai':selectedItem.tanggal_selesai,
+        'Jumlah Hari':selectedItem.jumlah_hari,
+        Status: action==='approve'?'DISETUJUI':'DITOLAK',
+        Lampiran: selectedItem.lampiran_drive_link || selectedItem.lampiran_url || '',
+      })
       showToast(`✅ Izin ${action==='approve'?'disetujui':'ditolak'}!`)
       setSelectedItem(null); setNote(''); refreshData()
     } else showToast('❌ Gagal memproses')
@@ -1857,7 +1909,7 @@ const HRDMore = ({ user, showToast, onLogout, dbData, refreshData }) => {
         ))}
         <button onClick={()=>setShowChangePw(true)} style={{ padding:14,borderRadius:14,color:'#444',fontWeight:700,fontSize:14,border:'1px solid #e0e0e0',background:'white',cursor:'pointer',marginTop:4,width:'100%' }}>🔑 Ubah Password</button>
         <button onClick={onLogout} style={{ padding:14,borderRadius:14,color:'#E53935',fontWeight:700,fontSize:14,border:'2px solid #FFCDD2',background:'white',cursor:'pointer',marginTop:4,width:'100%' }}>← Keluar</button>
-        <p style={{ textAlign:'center',fontSize:10,color:'#ddd',marginTop:8 }}>created by #gg & Rifqi</p>
+        <p style={{ textAlign:'center',fontSize:10,color:'#ddd',marginTop:8 }}>#gg</p>
       </div>
 
       {showChangePw && <ChangePasswordModal user={user} showToast={showToast} onClose={()=>setShowChangePw(false)}/>}
@@ -2014,7 +2066,7 @@ const LoginPage = ({ onLogin }) => {
         </div>
         <BtnGrad onClick={login} disabled={loading}>{loading?'Memverifikasi...':'Masuk Sekarang'}</BtnGrad>
         <p style={{ textAlign:'center',fontSize:11,color:'#ccc',marginTop:16 }}>Lupa password? Hubungi HRD</p>
-        <p style={{ textAlign:'center',fontSize:10,color:'#ddd',marginTop:20 }}>created by #gg & Rifqi</p>
+        <p style={{ textAlign:'center',fontSize:10,color:'#ddd',marginTop:20 }}>#gg</p>
       </div>
     </div>
   )

@@ -4,33 +4,12 @@
 // Browser kirim file ke endpoint ini, lalu server (yang punya kredensial aman)
 // yang upload ke Drive. Kredensial TIDAK PERNAH terkirim ke browser.
 
-import { google } from 'googleapis'
 import { Readable } from 'stream'
+import { getDriveClient } from '../../lib/google-auth'
 
 export const runtime = 'nodejs'
 
-// ── Setup OAuth2 Client (pakai akun Google pribadi, bukan Service Account) ──
-// Service Account ditinggalkan karena tidak punya storage quota sendiri
-// (Google menolak upload file dengan error "do not have storage quota"
-// kalau foldernya bukan Shared Drive). OAuth2 upload "atas nama" akun
-// pribadimu, jadi pakai kuota Drive 15GB gratis kamu sendiri.
-function getDriveClient() {
-  const clientId = process.env.GOOGLE_OAUTH_CLIENT_ID
-  const clientSecret = process.env.GOOGLE_OAUTH_CLIENT_SECRET
-  const redirectUri = process.env.GOOGLE_OAUTH_REDIRECT_URI
-  const refreshToken = process.env.GOOGLE_OAUTH_REFRESH_TOKEN
-
-  if (!clientId || !clientSecret || !refreshToken) {
-    throw new Error('Env var OAuth (GOOGLE_OAUTH_CLIENT_ID/SECRET/REFRESH_TOKEN) belum lengkap')
-  }
-
-  const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri)
-  oauth2Client.setCredentials({ refresh_token: refreshToken })
-  // googleapis otomatis refresh access_token pakai refresh_token ini tiap request,
-  // jadi tidak perlu login ulang manual selama refresh_token belum di-revoke.
-
-  return google.drive({ version: 'v3', auth: oauth2Client })
-}
+// (getDriveClient sekarang di app/lib/google-auth.js, dipakai bersama dengan log-sheet)
 
 // ── Cari atau buat folder di Drive, return folder ID ──
 async function findOrCreateFolder(drive, name, parentId) {

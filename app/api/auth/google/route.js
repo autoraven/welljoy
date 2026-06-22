@@ -25,7 +25,10 @@ export async function GET(request) {
   const url = oauth2Client.generateAuthUrl({
     access_type: 'offline',       // wajib, supaya dapat refresh_token
     prompt: 'consent',            // wajib, supaya refresh_token selalu dikirim ulang
-    scope: ['https://www.googleapis.com/auth/drive'],
+    scope: [
+      'https://www.googleapis.com/auth/drive',
+      'https://www.googleapis.com/auth/spreadsheets',
+    ],
   })
 
   // Redirect langsung ke halaman consent Google
