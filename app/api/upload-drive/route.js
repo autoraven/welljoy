@@ -5,6 +5,9 @@
 // yang upload ke Drive. Kredensial TIDAK PERNAH terkirim ke browser.
 
 import { google } from 'googleapis'
+import { Readable } from 'stream'
+
+export const runtime = 'nodejs'
 
 // ── Setup Service Account dari Environment Variable ──
 function getDriveClient() {
@@ -72,7 +75,6 @@ export async function POST(request) {
     const arrayBuffer = await file.arrayBuffer()
     const buffer = Buffer.from(arrayBuffer)
 
-    const { Readable } = await import('stream')
     const stream = Readable.from(buffer)
 
     const uploaded = await drive.files.create({
