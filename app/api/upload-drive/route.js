@@ -63,19 +63,27 @@ export async function POST(request) {
     }
 
     const drive = getDriveClient()
+    console.log('[upload-drive] step: drive client OK')
 
     // Struktur: ROOT / Absensi atau Lampiran-Izin / 2025-06-22 / 10001_Nama / file.jpg
     const kategoriFolderName = kategori === 'izin' ? 'Lampiran-Izin' : 'Absensi'
     const kategoriFolderId = await findOrCreateFolder(drive, kategoriFolderName, ROOT_FOLDER_ID)
+    console.log('[upload-drive] step: kategoriFolderId =', kategoriFolderId)
     const tanggalFolderId = await findOrCreateFolder(drive, tanggal, kategoriFolderId)
+    console.log('[upload-drive] step: tanggalFolderId =', tanggalFolderId)
     const namaFolderSafe = `${nip}_${(nama || 'Karyawan').replace(/[^a-zA-Z0-9 ]/g, '').trim()}`
     const nipFolderId = await findOrCreateFolder(drive, namaFolderSafe, tanggalFolderId)
+    console.log('[upload-drive] step: nipFolderId =', nipFolderId)
 
     // Convert file (Blob dari formData) jadi buffer untuk upload
+    console.log('[upload-drive] step: file type =', typeof file, 'instanceof Blob =', file instanceof Blob)
     const arrayBuffer = await file.arrayBuffer()
+    console.log('[upload-drive] step: arrayBuffer byteLength =', arrayBuffer?.byteLength)
     const buffer = Buffer.from(arrayBuffer)
+    console.log('[upload-drive] step: buffer length =', buffer.length)
 
     const stream = Readable.from(buffer)
+    console.log('[upload-drive] step: stream created, typeof Readable =', typeof Readable)
 
     const uploaded = await drive.files.create({
       requestBody: {
@@ -107,6 +115,7 @@ export async function POST(request) {
     // Google API error biasanya nyimpen detail asli di e.response.data atau e.errors
     const detail = e?.response?.data?.error || e?.errors || e.message
     console.error('[upload-drive] error:', JSON.stringify(detail, null, 2))
+    console.error('[upload-drive] stack:', e?.stack)
     return Response.json({ error: detail?.message || detail || 'Upload ke Drive gagal' }, { status: 500 })
   }
 }
