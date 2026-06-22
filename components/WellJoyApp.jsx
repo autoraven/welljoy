@@ -493,6 +493,42 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
     }
   }
 
+  // ── Backup ke Google Drive (non-blocking, via API Route) ──
+  // Dipanggil "fire and forget" — kalau Drive gagal/lambat, tidak mengganggu proses utama
+  const uploadToDrive = (base64, kategori, fileName, extraInfo = {}) => {
+    try {
+      if (!base64?.startsWith('data:')) return
+      // Convert base64 → Blob untuk dikirim sebagai FormData
+      const [meta, data] = base64.split(',')
+      const mime = meta.match(/data:(.*?);/)?.[1] || 'image/jpeg'
+      const bin = atob(data)
+      const bytes = new Uint8Array(bin.length)
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+      const blob = new Blob([bytes], { type: mime })
+
+      const fd = new FormData()
+      fd.append('file', blob, fileName)
+      fd.append('tanggal', extraInfo.tanggal || todayWIBGlobal())
+      fd.append('nip', extraInfo.nip || '')
+      fd.append('nama', extraInfo.nama || '')
+      fd.append('kategori', kategori) // 'absensi' | 'izin'
+      fd.append('fileName', fileName)
+
+      fetch('/api/upload-drive', { method:'POST', body: fd })
+        .then(r => r.json())
+        .then(j => console.log('[drive] backup hasil:', j))
+        .catch(e => console.warn('[drive] backup gagal (diabaikan):', e.message))
+    } catch(e) {
+      console.warn('[drive] backup exception (diabaikan):', e.message)
+    }
+  }
+
+  // helper kecil untuk tanggal WIB tanpa perlu komponen state
+  const todayWIBGlobal = () => {
+    const w = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Jakarta' }))
+    return `${w.getFullYear()}-${String(w.getMonth()+1).padStart(2,'0')}-${String(w.getDate()).padStart(2,'0')}`
+  }
+
   const handleClockIn = async (foto, loc) => {
     console.log('[clockIn] mulai, foto length:', foto?.length)
     setLoading(true)
@@ -516,6 +552,9 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
     console.log('[clockIn] uploading...')
     const fotoUrl = await uploadFoto(foto, path)
     console.log('[clockIn] upload selesai, fotoUrl:', fotoUrl ? 'OK (storage)' : 'fallback base64')
+
+    // Backup ke Google Drive — non-blocking, tidak menunggu hasil
+    uploadToDrive(foto, 'absensi', `masuk_${jamStr.replace(':','')}.jpg`, { tanggal: tanggalWIB, nip: user.nip, nama: user.nama })
 
     console.log('[clockIn] insert ke database...')
     const { error } = await supabase.from('attendance').insert({
@@ -559,6 +598,9 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
 
     const path = `${tanggalWIB}/${user.nip}_keluar_${jamStr.replace(':','')}.jpg`
     const fotoUrl = await uploadFoto(foto, path)
+
+    // Backup ke Google Drive — non-blocking
+    uploadToDrive(foto, 'absensi', `keluar_${jamStr.replace(':','')}.jpg`, { tanggal: tanggalWIB, nip: user.nip, nama: user.nama })
 
     const { error } = await supabase.from('attendance').update({
       jam_keluar:jamStr,
@@ -787,6 +829,25 @@ const EmpAjukanIzin = ({ user, showToast, onBack, refreshData, dbData }) => {
     }
   }
 
+  // Backup lampiran ke Drive — non-blocking, terima File langsung (bukan base64)
+  const backupLampiranToDrive = (file, tanggalWIB) => {
+    try {
+      const fd = new FormData()
+      fd.append('file', file, file.name)
+      fd.append('tanggal', tanggalWIB)
+      fd.append('nip', user.nip)
+      fd.append('nama', user.nama)
+      fd.append('kategori', 'izin')
+      fd.append('fileName', file.name)
+      fetch('/api/upload-drive', { method:'POST', body: fd })
+        .then(r => r.json())
+        .then(j => console.log('[drive] backup lampiran:', j))
+        .catch(e => console.warn('[drive] backup lampiran gagal (diabaikan):', e.message))
+    } catch(e) {
+      console.warn('[drive] backup lampiran exception:', e.message)
+    }
+  }
+
   const submit = async()=>{
     setErr('')
     if(!form.jenis||!form.mulai||!form.selesai||!form.alasan){setErr('Semua field wajib diisi');return}
@@ -801,6 +862,13 @@ const EmpAjukanIzin = ({ user, showToast, onBack, refreshData, dbData }) => {
       setLoading(false)
       return
     }
+
+    // Backup ke Google Drive (non-blocking)
+    const tanggalWIB = (() => {
+      const w = new Date(new Date().toLocaleString('en-US', { timeZone:'Asia/Jakarta' }))
+      return `${w.getFullYear()}-${String(w.getMonth()+1).padStart(2,'0')}-${String(w.getDate()).padStart(2,'0')}`
+    })()
+    backupLampiranToDrive(lampiran, tanggalWIB)
 
     const {error} = await supabase.from('izin').insert({
       nip:user.nip, nama:user.nama, jabatan:emp.jabatan||'',
