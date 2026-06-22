@@ -11,7 +11,7 @@ function getDriveClient() {
   const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_KEY || '{}')
   const auth = new google.auth.GoogleAuth({
     credentials,
-    scopes: ['https://www.googleapis.com/auth/drive.file'],
+    scopes: ['https://www.googleapis.com/auth/drive'],
   })
   return google.drive({ version: 'v3', auth })
 }
@@ -22,7 +22,10 @@ async function findOrCreateFolder(drive, name, parentId) {
     ? `name='${name}' and '${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`
     : `name='${name}' and mimeType='application/vnd.google-apps.folder' and trashed=false`
 
-  const res = await drive.files.list({ q, fields: 'files(id, name)', spaces: 'drive' })
+  const res = await drive.files.list({
+    q, fields: 'files(id, name)', spaces: 'drive',
+    supportsAllDrives: true, includeItemsFromAllDrives: true,
+  })
   if (res.data.files.length > 0) return res.data.files[0].id
 
   const folder = await drive.files.create({
@@ -32,6 +35,7 @@ async function findOrCreateFolder(drive, name, parentId) {
       ...(parentId ? { parents: [parentId] } : {}),
     },
     fields: 'id',
+    supportsAllDrives: true,
   })
   return folder.data.id
 }
@@ -81,12 +85,14 @@ export async function POST(request) {
         body: stream,
       },
       fields: 'id, webViewLink, webContentLink',
+      supportsAllDrives: true,
     })
 
     // Set permission agar bisa diakses dengan link (opsional, hanya readonly oleh siapapun yg punya link)
     await drive.permissions.create({
       fileId: uploaded.data.id,
       requestBody: { role: 'reader', type: 'anyone' },
+      supportsAllDrives: true,
     })
 
     return Response.json({
@@ -96,7 +102,9 @@ export async function POST(request) {
       folderPath: `${kategoriFolderName}/${tanggal}/${namaFolderSafe}/${fileName}`,
     })
   } catch (e) {
-    console.error('[upload-drive] error:', e)
-    return Response.json({ error: e.message || 'Upload ke Drive gagal' }, { status: 500 })
+    // Google API error biasanya nyimpen detail asli di e.response.data atau e.errors
+    const detail = e?.response?.data?.error || e?.errors || e.message
+    console.error('[upload-drive] error:', JSON.stringify(detail, null, 2))
+    return Response.json({ error: detail?.message || detail || 'Upload ke Drive gagal' }, { status: 500 })
   }
 }
