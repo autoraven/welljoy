@@ -100,6 +100,57 @@ const Card = ({ children, style={}, onClick }) => (
   <div onClick={onClick} style={{ background:'white',borderRadius:16,boxShadow:'0 4px 16px rgba(0,0,0,0.06)',cursor:onClick?'pointer':'default',...style }}>{children}</div>
 )
 
+// ─── CHANGE PASSWORD MODAL ──────────────────────────────────────────────────
+const inputStyle = { width:'100%',border:'1px solid #e0e0e0',borderRadius:12,padding:'10px 12px',fontSize:13,outline:'none',boxSizing:'border-box' }
+
+const ChangePasswordModal = ({ user, onClose, showToast }) => {
+  const [oldPw, setOldPw] = useState('')
+  const [newPw, setNewPw] = useState('')
+  const [confirmPw, setConfirmPw] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  const submit = async () => {
+    if (!oldPw || !newPw || !confirmPw) { showToast('⚠️ Semua kolom wajib diisi'); return }
+    if (newPw.length < 6) { showToast('⚠️ Password baru minimal 6 karakter'); return }
+    if (newPw !== confirmPw) { showToast('⚠️ Konfirmasi password tidak cocok'); return }
+    setLoading(true)
+    try {
+      // verifikasi password lama langsung ke DB (bukan dari cache/session)
+      const { data: check } = await supabase.from('users').select('nip').eq('nip', user.nip).eq('password', oldPw).maybeSingle()
+      if (!check) { showToast('❌ Password lama salah'); setLoading(false); return }
+      const { error } = await supabase.from('users').update({ password: newPw }).eq('nip', user.nip)
+      if (error) { showToast('❌ Gagal mengubah password'); setLoading(false); return }
+      await supabase.from('audit_log').insert({ user_name: user.nama, nip: user.nip, aktivitas: 'Ubah password', keterangan: '' })
+      showToast('✅ Password berhasil diubah')
+      onClose()
+    } catch (e) {
+      console.error(e)
+      showToast('❌ Terjadi kesalahan')
+    }
+    setLoading(false)
+  }
+
+  return (
+    <Modal title="Ubah Password" onClose={onClose}>
+      <div style={{ display:'flex',flexDirection:'column',gap:12 }}>
+        <div>
+          <p style={{ fontSize:12,fontWeight:700,margin:'0 0 6px' }}>Password Lama</p>
+          <input type="password" value={oldPw} onChange={e=>setOldPw(e.target.value)} placeholder="Masukkan password lama" style={inputStyle}/>
+        </div>
+        <div>
+          <p style={{ fontSize:12,fontWeight:700,margin:'0 0 6px' }}>Password Baru</p>
+          <input type="password" value={newPw} onChange={e=>setNewPw(e.target.value)} placeholder="Minimal 6 karakter" style={inputStyle}/>
+        </div>
+        <div>
+          <p style={{ fontSize:12,fontWeight:700,margin:'0 0 6px' }}>Konfirmasi Password Baru</p>
+          <input type="password" value={confirmPw} onChange={e=>setConfirmPw(e.target.value)} placeholder="Ulangi password baru" style={inputStyle}/>
+        </div>
+        <BtnGrad onClick={submit} disabled={loading}>{loading?'Menyimpan...':'Simpan Password Baru'}</BtnGrad>
+      </div>
+    </Modal>
+  )
+}
+
 const NotifBell = ({ nip, onOpen, notifications=[] }) => {
   const count = notifications.filter(n => n.nip===nip && !n.is_read).length
   return (
@@ -420,6 +471,7 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
   const [selectedAnn, setSelectedAnn] = useState(null)
   const [camera, setCamera] = useState(null)
   const [loading, setLoading] = useState(false)
+  const [showChangePw, setShowChangePw] = useState(false)
 
   useEffect(()=>{ const t=setInterval(()=>setNow(new Date()),1000); return()=>clearInterval(t); },[])
 
@@ -681,8 +733,11 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
             </div>
           ))}
         </Card>
+        <button onClick={()=>setShowChangePw(true)} style={{ padding:14,borderRadius:14,color:'#444',fontWeight:700,fontSize:14,border:'1px solid #e0e0e0',background:'white',cursor:'pointer',marginTop:4,width:'100%' }}>🔑 Ubah Password</button>
         <button onClick={onLogout} style={{ padding:14,borderRadius:14,color:'#E53935',fontWeight:700,fontSize:14,border:'2px solid #FFCDD2',background:'white',cursor:'pointer',marginTop:4,width:'100%' }}>← Keluar</button>
       </div>
+
+      {showChangePw && <ChangePasswordModal user={user} showToast={showToast} onClose={()=>setShowChangePw(false)}/>}
 
       {camera && <CameraModal mode={camera.mode} onCapture={(foto, loc)=>{ camera.cb(foto, loc); setCamera(null) }} onClose={()=>setCamera(null)}/>}
 
@@ -1759,6 +1814,7 @@ const HRDMore = ({ user, showToast, onLogout, dbData, refreshData }) => {
   const [editHb, setEditHb] = useState(null)
   const [editHbForm, setEditHbForm] = useState({ judul:'',isi:'' })
   const [newHb, setNewHb] = useState(false)
+  const [showChangePw, setShowChangePw] = useState(false)
 
   const handleAnnounce = async()=>{
     if(!annForm.judul||!annForm.isi){showToast('Judul dan isi wajib diisi');return}
@@ -1799,9 +1855,12 @@ const HRDMore = ({ user, showToast, onLogout, dbData, refreshData }) => {
             <span style={{ color:'#ccc',fontSize:18 }}>›</span>
           </button>
         ))}
+        <button onClick={()=>setShowChangePw(true)} style={{ padding:14,borderRadius:14,color:'#444',fontWeight:700,fontSize:14,border:'1px solid #e0e0e0',background:'white',cursor:'pointer',marginTop:4,width:'100%' }}>🔑 Ubah Password</button>
         <button onClick={onLogout} style={{ padding:14,borderRadius:14,color:'#E53935',fontWeight:700,fontSize:14,border:'2px solid #FFCDD2',background:'white',cursor:'pointer',marginTop:4,width:'100%' }}>← Keluar</button>
         <p style={{ textAlign:'center',fontSize:10,color:'#ddd',marginTop:8 }}>#gg</p>
       </div>
+
+      {showChangePw && <ChangePasswordModal user={user} showToast={showToast} onClose={()=>setShowChangePw(false)}/>}
 
       {sub==='handbook' && (
         <Modal title="Handbook Perusahaan" onClose={()=>{ setSub(null); setEditHb(null); setNewHb(false) }} wide>
@@ -1895,7 +1954,7 @@ const HRDNav = ({ active, onChange, dbData }) => {
   const menungguIzin = dbData.izin.filter(c=>c.status==='MENUNGGU').length
   return (
     <div style={{ position:'fixed',bottom:0,left:0,right:0,maxWidth:430,margin:'0 auto',background:'white',borderTop:'1px solid #f0f0f0',display:'flex',zIndex:40,boxShadow:'0 -4px 20px rgba(0,0,0,0.06)' }}>
-      {[{key:'dashboard',icon:'🏠',label:'Dashboard'},{key:'karyawan',icon:'👥',label:'Karyawan'},{key:'absensi',icon:'🕒',label:'Absensi'},{key:'approval',icon:'📋',label:'Approval'},{key:'more',icon:'☰',label:'Lainnya'}].map(item=>{
+      {[{key:'dashboard',icon:'🏠',label:'Dashboard'},{key:'karyawan',icon:'👥',label:'Karyawan'},{key:'absensaya',icon:'🖐️',label:'Absen Saya'},{key:'izinsaya',icon:'📅',label:'Izin Saya'},{key:'absensi',icon:'🕒',label:'Absensi'},{key:'approval',icon:'📋',label:'Approval'},{key:'more',icon:'☰',label:'Lainnya'}].map(item=>{
         const badge = item.key==='approval'?menungguIzin:0
         return (
           <button key={item.key} onClick={()=>onChange(item.key)} style={{ flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:2,padding:'10px 0',background:'none',border:'none',cursor:'pointer',position:'relative' }}>
@@ -2072,12 +2131,18 @@ export default function WellJoyApp() {
       <Toast msg={toast}/>
       {isHRD ? (
         <>
-          {hrdNav==='dashboard' && <HRDDashboard {...commonProps} onNavChange={setHrdNav}/>}
-          {hrdNav==='karyawan'  && <HRDKaryawan  {...commonProps}/>}
-          {hrdNav==='absensi'   && <HRDAbsensi   {...commonProps}/>}
-          {hrdNav==='approval'  && <HRDApproval  {...commonProps}/>}
-          {hrdNav==='more'      && <HRDMore      {...commonProps} onLogout={handleLogout}/>}
-          <HRDNav active={hrdNav} onChange={setHrdNav} dbData={dbData}/>
+          {hrdNav==='dashboard'  && <HRDDashboard {...commonProps} onNavChange={setHrdNav}/>}
+          {hrdNav==='karyawan'   && <HRDKaryawan  {...commonProps}/>}
+          {hrdNav==='absensaya'  && <EmpHome      {...commonProps} onLogout={handleLogout}/>}
+          {hrdNav==='izinsaya'   && (
+            ajukanIzin
+              ? <EmpAjukanIzin {...commonProps} onBack={()=>setAjukanIzin(false)}/>
+              : <EmpIzin {...commonProps} onAjukan={()=>setAjukanIzin(true)}/>
+          )}
+          {hrdNav==='absensi'    && <HRDAbsensi   {...commonProps}/>}
+          {hrdNav==='approval'   && <HRDApproval  {...commonProps}/>}
+          {hrdNav==='more'       && <HRDMore      {...commonProps} onLogout={handleLogout}/>}
+          <HRDNav active={hrdNav} onChange={v=>{ setHrdNav(v); setAjukanIzin(false) }} dbData={dbData}/>
         </>
       ) : (
         <>
