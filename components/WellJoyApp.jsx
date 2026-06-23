@@ -1909,7 +1909,7 @@ const HRDMore = ({ user, showToast, onLogout, dbData, refreshData }) => {
         ))}
         <button onClick={()=>setShowChangePw(true)} style={{ padding:14,borderRadius:14,color:'#444',fontWeight:700,fontSize:14,border:'1px solid #e0e0e0',background:'white',cursor:'pointer',marginTop:4,width:'100%' }}>🔑 Ubah Password</button>
         <button onClick={onLogout} style={{ padding:14,borderRadius:14,color:'#E53935',fontWeight:700,fontSize:14,border:'2px solid #FFCDD2',background:'white',cursor:'pointer',marginTop:4,width:'100%' }}>← Keluar</button>
-        <p style={{ textAlign:'center',fontSize:10,color:'#ddd',marginTop:8 }}>Created by #gg & Rifqi</p>
+        <p style={{ textAlign:'center',fontSize:10,color:'#ddd',marginTop:8 }}>#gg</p>
       </div>
 
       {showChangePw && <ChangePasswordModal user={user} showToast={showToast} onClose={()=>setShowChangePw(false)}/>}
@@ -2006,7 +2006,7 @@ const HRDNav = ({ active, onChange, dbData }) => {
   const menungguIzin = dbData.izin.filter(c=>c.status==='MENUNGGU').length
   return (
     <div style={{ position:'fixed',bottom:0,left:0,right:0,maxWidth:430,margin:'0 auto',background:'white',borderTop:'1px solid #f0f0f0',display:'flex',zIndex:40,boxShadow:'0 -4px 20px rgba(0,0,0,0.06)' }}>
-      {[{key:'dashboard',icon:'🏠',label:'Dashboard'},{key:'karyawan',icon:'👥',label:'Karyawan'},{key:'absensaya',icon:'🖐️',label:'Absen Saya'},{key:'izinsaya',icon:'📅',label:'Izin Saya'},{key:'absensi',icon:'🕒',label:'Absensi'},{key:'approval',icon:'📋',label:'Approval'},{key:'more',icon:'☰',label:'Lainnya'}].map(item=>{
+      {[{key:'dashboard',icon:'🏠',label:'Dashboard'},{key:'karyawan',icon:'👥',label:'Karyawan'},{key:'absensi',icon:'🕒',label:'Absensi'},{key:'approval',icon:'📋',label:'Approval'},{key:'more',icon:'☰',label:'Lainnya'}].map(item=>{
         const badge = item.key==='approval'?menungguIzin:0
         return (
           <button key={item.key} onClick={()=>onChange(item.key)} style={{ flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:2,padding:'10px 0',background:'none',border:'none',cursor:'pointer',position:'relative' }}>
@@ -2066,7 +2066,7 @@ const LoginPage = ({ onLogin }) => {
         </div>
         <BtnGrad onClick={login} disabled={loading}>{loading?'Memverifikasi...':'Masuk Sekarang'}</BtnGrad>
         <p style={{ textAlign:'center',fontSize:11,color:'#ccc',marginTop:16 }}>Lupa password? Hubungi HRD</p>
-        <p style={{ textAlign:'center',fontSize:10,color:'#ddd',marginTop:20 }}>Created by #gg & Rifqi</p>
+        <p style={{ textAlign:'center',fontSize:10,color:'#ddd',marginTop:20 }}>#gg</p>
       </div>
     </div>
   )
@@ -2185,16 +2185,10 @@ export default function WellJoyApp() {
         <>
           {hrdNav==='dashboard'  && <HRDDashboard {...commonProps} onNavChange={setHrdNav}/>}
           {hrdNav==='karyawan'   && <HRDKaryawan  {...commonProps}/>}
-          {hrdNav==='absensaya'  && <EmpHome      {...commonProps} onLogout={handleLogout}/>}
-          {hrdNav==='izinsaya'   && (
-            ajukanIzin
-              ? <EmpAjukanIzin {...commonProps} onBack={()=>setAjukanIzin(false)}/>
-              : <EmpIzin {...commonProps} onAjukan={()=>setAjukanIzin(true)}/>
-          )}
           {hrdNav==='absensi'    && <HRDAbsensi   {...commonProps}/>}
           {hrdNav==='approval'   && <HRDApproval  {...commonProps}/>}
           {hrdNav==='more'       && <HRDMore      {...commonProps} onLogout={handleLogout}/>}
-          <HRDNav active={hrdNav} onChange={v=>{ setHrdNav(v); setAjukanIzin(false) }} dbData={dbData}/>
+          <HRDNav active={hrdNav} onChange={setHrdNav} dbData={dbData}/>
         </>
       ) : (
         <>
