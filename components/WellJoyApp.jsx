@@ -329,10 +329,14 @@ const CameraModal = ({ mode, onCapture, onClose }) => {
       return
     }
 
-    // Draw dulu SEBELUM stop stream
+    // Draw dulu SEBELUM stop stream — flip horizontal agar foto tidak mirror
     cvs.width = w
     cvs.height = h
-    cvs.getContext('2d').drawImage(vid, 0, 0, w, h)
+    const ctx = cvs.getContext('2d')
+    ctx.translate(w, 0)
+    ctx.scale(-1, 1)
+    ctx.drawImage(vid, 0, 0, w, h)
+    ctx.setTransform(1, 0, 0, 1, 0, 0) // reset transform
 
     // Stop stream SETELAH draw
     stopStream()
@@ -391,13 +395,13 @@ const CameraModal = ({ mode, onCapture, onClose }) => {
           )}
 
           <div style={{ borderRadius:16,overflow:'hidden',background:'#000',marginBottom:12,position:'relative',height:260 }}>
-            {/* Video live */}
+            {/* Video live — mirror hanya untuk preview, BUKAN untuk canvas */}
             <video
               ref={videoRef}
               autoPlay
               playsInline
               muted
-              style={{ width:'100%',height:'100%',objectFit:'cover',display: phase==='captured' ? 'none' : 'block' }}
+              style={{ width:'100%',height:'100%',objectFit:'cover',display: phase==='captured' ? 'none' : 'block', transform:'scaleX(-1)' }}
             />
             {/* Canvas OFF-SCREEN tapi tetap di DOM, bukan display:none agar drawImage bekerja */}
             <canvas ref={canvasRef} style={{ position:'absolute',left:'-9999px',top:0,visibility:'hidden' }}/>
@@ -506,6 +510,29 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
   const clockedOut = !!todayAtt?.jam_keluar
   const myAtt = dbData.attendance.filter(a=>a.nip===user.nip).slice(0,3)
   const emp = dbData.karyawan.find(k=>k.nip===user.nip)||user
+
+  // ── Cek izin aktif hari ini ──
+  const todayIzin = dbData.izin?.find(iz =>
+    iz.nip === user.nip &&
+    iz.status === 'DISETUJUI' &&
+    iz.tanggal_mulai <= today &&
+    iz.tanggal_selesai >= today
+  )
+  const hasIzinTerlambat   = todayIzin?.jenis_izin === 'Izin Terlambat'
+  const hasIzinSetengahHari = todayIzin?.jenis_izin === 'Izin Setengah Hari'
+  const hasIzinLembur      = todayIzin?.jenis_izin === 'Izin Lembur'
+
+  // Jam wajib hari ini
+  const hariIdxNow = wibNow.getDay()
+  const namaHariNow = ['minggu','senin','selasa','rabu','kamis','jumat','sabtu'][hariIdxNow]
+  const jamWajibMasukHari = emp[`jam_masuk_${namaHariNow}`] || emp.jam_masuk_wajib || '08:00'
+  const jamWajibKeluarHari = emp[`jam_keluar_${namaHariNow}`] || emp.jam_keluar_wajib || '16:40'
+  const [wkH, wkM] = jamWajibKeluarHari.split(':').map(Number)
+  const nowMenit = wibNow.getHours()*60 + wibNow.getMinutes()
+  const keluarMenit = wkH*60 + wkM
+
+  // Clock Out terbuka kalau: sudah melewati jam keluar wajib, ATAU punya izin lembur hari ini (acc)
+  const clockOutTerbuka = clockedIn && !clockedOut && (nowMenit >= keluarMenit || hasIzinLembur)
 
   // ── Helper waktu WIB untuk handleClockIn/Out ──
   const getWIBString = (d = new Date()) => {
@@ -617,8 +644,30 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
     const jamWajib = emp[`jam_masuk_${namaHari}`] || emp.jam_masuk_wajib || '08:00'
     const [wajibH, wajibM] = jamWajib.split(':').map(Number)
     const [nowH, nowM] = jamStr.split(':').map(Number)
-    const menit  = Math.max(0, (nowH*60+nowM) - (wajibH*60+wajibM))
-    const status = menit > 0 ? 'TERLAMBAT' : 'HADIR'
+    const nowTotalMenit = nowH*60+nowM
+
+    // ── Cek izin aktif hari ini (disetujui) ──
+    const todayIzinAktif = dbData.izin?.find(iz =>
+      iz.nip === user.nip && iz.status === 'DISETUJUI' &&
+      iz.tanggal_mulai <= tanggalWIB && iz.tanggal_selesai >= tanggalWIB
+    )
+
+    let menit = 0
+    let status = 'HADIR'
+
+    if (todayIzinAktif?.jenis_izin === 'Izin Terlambat') {
+      // Izin Terlambat disetujui → tidak ada telat, status tetap HADIR
+      menit = 0; status = 'HADIR'
+    } else if (todayIzinAktif?.jenis_izin === 'Izin Setengah Hari') {
+      // Izin Setengah Hari → batas masuk jam 12:45, lewat itu baru hitung telat
+      const batasSetengahH = 12, batasSetengahM = 45
+      menit = Math.max(0, nowTotalMenit - (batasSetengahH*60+batasSetengahM))
+      status = menit > 0 ? 'TERLAMBAT' : 'HADIR'
+    } else {
+      // Normal: hitung telat dari jam wajib masuk
+      menit  = Math.max(0, nowTotalMenit - (wajibH*60+wajibM))
+      status = menit > 0 ? 'TERLAMBAT' : 'HADIR'
+    }
     const lokasiLabel  = loc?.label  || 'Tidak diketahui'
     const lokasiCoords = loc?.coords || null
 
@@ -732,15 +781,33 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
         <Card style={{ padding:16 }}>
           <div style={{ display:'flex',alignItems:'center',gap:8,marginBottom:12 }}><span style={{ fontSize:20 }}>🖐️</span><div><p style={{ fontWeight:700,margin:0 }}>Absen & Selfie</p><p style={{ fontSize:11,color:'#aaa',margin:0 }}>Rekam kehadiranmu</p></div></div>
           <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:12 }}>
-            {[['in','Clock In',clockedIn,'#E53935'],['out','Clock Out',clockedOut,'#F5A623']].map(([m,lbl,done,col])=>(
-              <button key={m} onClick={()=>{
-                if(m==='in'){ if(done){showToast('Sudah Clock In');return;} setCamera({mode:'in',cb:handleClockIn}) }
-                else { if(!clockedIn){showToast('Lakukan Clock In dulu');return;} if(done){showToast('Sudah Clock Out');return;} setCamera({mode:'out',cb:handleClockOut}) }
-              }} style={{ display:'flex',flexDirection:'column',alignItems:'center',padding:'16px 8px',borderRadius:14,background:done?'#ccc':col,color:'white',border:'none',cursor:'pointer',fontWeight:700 }}>
-                <span style={{ fontSize:24,marginBottom:4 }}>📷</span><span style={{ fontSize:13 }}>{lbl}</span>
-              </button>
-            ))}
+            {/* Clock In */}
+            <button onClick={()=>{
+              if(clockedIn){showToast('Sudah Clock In hari ini');return;}
+              setCamera({mode:'in',cb:handleClockIn})
+            }} style={{ display:'flex',flexDirection:'column',alignItems:'center',padding:'16px 8px',borderRadius:14,background:clockedIn?'#ccc':'#E53935',color:'white',border:'none',cursor:'pointer',fontWeight:700,position:'relative' }}>
+              <span style={{ fontSize:24,marginBottom:4 }}>📷</span><span style={{ fontSize:13 }}>Clock In</span>
+              {hasIzinTerlambat && !clockedIn && <span style={{ position:'absolute',top:6,right:6,fontSize:9,background:'#43A047',borderRadius:99,padding:'2px 5px',fontWeight:700 }}>Izin ✓</span>}
+            </button>
+            {/* Clock Out */}
+            <button onClick={()=>{
+              if(!clockedIn){showToast('Lakukan Clock In dulu');return;}
+              if(clockedOut){showToast('Sudah Clock Out hari ini');return;}
+              if(!clockOutTerbuka){showToast(`Clock Out buka jam ${jamWajibKeluarHari} WIB${hasIzinLembur?'':', ajukan Izin Lembur untuk lembur'}`);return;}
+              setCamera({mode:'out',cb:handleClockOut})
+            }} style={{ display:'flex',flexDirection:'column',alignItems:'center',padding:'16px 8px',borderRadius:14,background:clockedOut?'#ccc':(!clockedIn||!clockOutTerbuka)?'#bbb':'#F5A623',color:'white',border:'none',cursor:'pointer',fontWeight:700,position:'relative' }}>
+              <span style={{ fontSize:24,marginBottom:4 }}>📷</span><span style={{ fontSize:13 }}>Clock Out</span>
+              {hasIzinLembur && clockedIn && !clockedOut && <span style={{ position:'absolute',top:6,right:6,fontSize:9,background:'#7B1FA2',borderRadius:99,padding:'2px 5px',fontWeight:700 }}>Lembur ✓</span>}
+            </button>
           </div>
+          {/* Info izin aktif */}
+          {todayIzin && !clockedOut && (
+            <div style={{ marginTop:8,background:'#E8F5E9',borderRadius:10,padding:'8px 12px',fontSize:12,color:'#2E7D32',fontWeight:600 }}>
+              ✅ {todayIzin.jenis_izin} disetujui hari ini
+              {hasIzinSetengahHari && ' — batas masuk 12:45'}
+              {hasIzinLembur && ' — Clock Out terbuka setelah jam kerja'}
+            </div>
+          )}
         </Card>
         <button onClick={()=>setShowAnn(true)} style={{ display:'flex',alignItems:'center',gap:12,padding:16,background:'white',borderRadius:16,border:'none',cursor:'pointer',boxShadow:'0 4px 16px rgba(0,0,0,0.06)' }}>
           <div style={{ width:40,height:40,borderRadius:12,background:'#FFF3E0',display:'flex',alignItems:'center',justifyContent:'center',fontSize:20 }}>📢</div>
@@ -868,14 +935,39 @@ const EmpIzin = ({ user, onAjukan, dbData, refreshData }) => {
 
 // ─── EMPLOYEE AJUKAN IZIN ─────────────────────────────────────────────────────
 const EmpAjukanIzin = ({ user, showToast, onBack, refreshData, dbData }) => {
-  const [form, setForm] = useState({ jenis:'',mulai:'',selesai:'',alasan:'' })
+  // todayWIB untuk default tanggal
+  const todayWIBStr = (() => {
+    const w = new Date(new Date().toLocaleString('en-US', { timeZone:'Asia/Jakarta' }))
+    return `${w.getFullYear()}-${String(w.getMonth()+1).padStart(2,'0')}-${String(w.getDate()).padStart(2,'0')}`
+  })()
+
+  const [form, setForm] = useState({ jenis:'', mulai:todayWIBStr, selesai:todayWIBStr, alasan:'' })
   const [lampiran, setLampiran] = useState(null)
   const [err, setErr] = useState('')
   const [loading, setLoading] = useState(false)
   const [ok, setOk] = useState(false)
   const fileRef = useRef(null)
-  const set = k=>e=>setForm({...form,[k]:e.target.value})
-  const hari = ()=>{ if(!form.mulai||!form.selesai) return 0; const d=Math.ceil((new Date(form.selesai)-new Date(form.mulai))/86400000)+1; return d>0?d:0 }
+  const set = k=>e=>setForm(f=>({...f,[k]:e.target.value}))
+
+  // Izin terlambat/setengah hari/lembur = selalu 1 hari (tanggal mulai = selesai)
+  const IS_ONE_DAY = ['Izin Terlambat','Izin Setengah Hari','Izin Lembur'].includes(form.jenis)
+  const hari = () => {
+    if (IS_ONE_DAY) return 1
+    if(!form.mulai||!form.selesai) return 0
+    const d = Math.ceil((new Date(form.selesai)-new Date(form.mulai))/86400000)+1
+    return d>0?d:0
+  }
+  const selesai = IS_ONE_DAY ? form.mulai : form.selesai
+
+  // Info konteks per jenis izin
+  const JENIS_INFO = {
+    'Izin Terlambat': { icon:'⏰', warna:'#E65100', hint:'Jika disetujui, keterlambatan hari ini akan dihapus dari rekap.' },
+    'Izin Setengah Hari': { icon:'🌓', warna:'#1565C0', hint:'Clock In maksimal 12:45. Lebih dari itu tetap dihitung terlambat.' },
+    'Izin Lembur': { icon:'🌙', warna:'#4A148C', hint:'Tombol Clock Out akan terbuka kembali setelah jam 16:40 di hari yang diajukan.' },
+    'Izin Sakit': { icon:'🏥', warna:'#C62828', hint:'Sertakan surat dokter sebagai lampiran.' },
+    'Izin Lainnya': { icon:'📋', warna:'#555', hint:'Sertakan surat keterangan / dokumen pendukung.' },
+  }
+  const info = JENIS_INFO[form.jenis]
 
   // Upload lampiran (gambar/PDF) ke Supabase Storage via REST API langsung
   const uploadLampiran = async (file) => {
@@ -886,41 +978,20 @@ const EmpAjukanIzin = ({ user, showToast, onBack, refreshData, dbData }) => {
       const safeName = `${Date.now()}_${user.nip}.${ext}`
       const path = `${user.nip}/${safeName}`
       const uploadUrl = `${SUPABASE_URL}/storage/v1/object/lampiran-izin/${path}`
-
       const arrayBuffer = await file.arrayBuffer()
       const bytes = new Uint8Array(arrayBuffer)
-
-      console.log('[uploadLampiran] mulai', path, Math.round(bytes.length/1024), 'KB', file.type)
-
       const uploadPromise = fetch(uploadUrl, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${SUPABASE_KEY}`,
-          'apikey': SUPABASE_KEY,
-          'Content-Type': file.type || 'application/octet-stream',
-          'x-upsert': 'true',
-        },
+        headers: { 'Authorization': `Bearer ${SUPABASE_KEY}`, 'apikey': SUPABASE_KEY, 'Content-Type': file.type || 'application/octet-stream', 'x-upsert': 'true' },
         body: bytes,
       })
       const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 10000))
       const res = await Promise.race([uploadPromise, timeoutPromise])
-
-      if (!res.ok) {
-        const t = await res.text().catch(()=> '')
-        console.error('[uploadLampiran] gagal status:', res.status, t)
-        return null
-      }
-
-      const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/lampiran-izin/${path}`
-      console.log('[uploadLampiran] berhasil:', publicUrl)
-      return publicUrl
-    } catch(e) {
-      console.error('[uploadLampiran] exception:', e.message)
-      return null
-    }
+      if (!res.ok) { console.error('[uploadLampiran] gagal status:', res.status); return null }
+      return `${SUPABASE_URL}/storage/v1/object/public/lampiran-izin/${path}`
+    } catch(e) { console.error('[uploadLampiran] exception:', e.message); return null }
   }
 
-  // Backup lampiran ke Drive — return Promise<link> supaya bisa dicatat ke Sheets
   const backupLampiranToDrive = (file, tanggalWIB) => {
     try {
       const fd = new FormData()
@@ -934,50 +1005,39 @@ const EmpAjukanIzin = ({ user, showToast, onBack, refreshData, dbData }) => {
         .then(r => r.json())
         .then(j => { console.log('[drive] backup lampiran:', j); return j?.webViewLink || null })
         .catch(e => { console.warn('[drive] backup lampiran gagal (diabaikan):', e.message); return null })
-    } catch(e) {
-      console.warn('[drive] backup lampiran exception:', e.message)
-      return Promise.resolve(null)
-    }
+    } catch(e) { console.warn('[drive] backup lampiran exception:', e.message); return Promise.resolve(null) }
   }
 
   const submit = async()=>{
     setErr('')
-    if(!form.jenis||!form.mulai||!form.selesai||!form.alasan){setErr('Semua field wajib diisi');return}
-    if(!lampiran){setErr('Lampiran bukti wajib diunggah');return}
+    if(!form.jenis) { setErr('Pilih jenis izin terlebih dahulu'); return }
+    if(!form.mulai||!form.alasan) { setErr('Semua field wajib diisi'); return }
+    if(!IS_ONE_DAY && !form.selesai) { setErr('Tanggal selesai wajib diisi'); return }
+    if(!lampiran) { setErr('Lampiran bukti wajib diunggah'); return }
     setLoading(true)
     showToast('⏳ Mengupload lampiran...')
     const emp = dbData.karyawan.find(k=>k.nip===user.nip)||user
-
     const lampiranUrl = await uploadLampiran(lampiran)
-    if (!lampiranUrl) {
-      setErr('Gagal mengupload lampiran. Coba lagi atau gunakan file yang lebih kecil.')
-      setLoading(false)
-      return
-    }
+    if (!lampiranUrl) { setErr('Gagal mengupload lampiran. Coba lagi atau gunakan file yang lebih kecil.'); setLoading(false); return }
 
-    // Backup ke Google Drive — ditunggu hasilnya supaya link bisa dicatat ke Sheets
-    const tanggalWIB = (() => {
-      const w = new Date(new Date().toLocaleString('en-US', { timeZone:'Asia/Jakarta' }))
-      return `${w.getFullYear()}-${String(w.getMonth()+1).padStart(2,'0')}-${String(w.getDate()).padStart(2,'0')}`
-    })()
+    const tanggalWIB = todayWIBStr
     const driveLinkLampiran = await backupLampiranToDrive(lampiran, tanggalWIB)
 
     const {data: inserted, error} = await supabase.from('izin').insert({
       nip:user.nip, nama:user.nama, jabatan:emp.jabatan||'',
-      jenis_izin:form.jenis, tanggal_mulai:form.mulai, tanggal_selesai:form.selesai,
+      jenis_izin:form.jenis, tanggal_mulai:form.mulai, tanggal_selesai:selesai,
       jumlah_hari:hari(), keterangan:form.alasan, status:'MENUNGGU',
-      diajukan_pada:new Date().toISOString().split('T')[0],
+      diajukan_pada:tanggalWIB,
       lampiran_nama: lampiran.name,
       lampiran_url: lampiranUrl,
       lampiran_drive_link: driveLinkLampiran || null,
     }).select().single()
     if(!error){
-      await supabase.from('audit_log').insert({ user_name:user.nama,nip:user.nip,aktivitas:`Pengajuan izin ${form.mulai}–${form.selesai}`,keterangan:`${form.jenis}, ${hari()} hari` })
-      await supabase.from('notifications').insert({ nip:'20001',type:'APPROVAL',message:`${user.nama} mengajukan izin ${hari()} hari (${form.jenis})` })
-      // Catat ke Google Sheets, key = ID izin (unik), supaya nanti bisa di-update statusnya saat di-approve/ditolak
+      await supabase.from('audit_log').insert({ user_name:user.nama,nip:user.nip,aktivitas:`Pengajuan ${form.jenis}`,keterangan:`${form.mulai}${!IS_ONE_DAY&&selesai!==form.mulai?`–${selesai}`:''}, ${hari()} hari` })
+      await supabase.from('notifications').insert({ nip:'20001',type:'APPROVAL',message:`${user.nama} mengajukan ${form.jenis} (${form.mulai})` })
       logToSheet('izin', { ID: inserted?.id }, {
         ID: inserted?.id, NIP:user.nip, Nama:user.nama, 'Jenis Izin':form.jenis,
-        'Tanggal Mulai':form.mulai, 'Tanggal Selesai':form.selesai, 'Jumlah Hari':hari(),
+        'Tanggal Mulai':form.mulai, 'Tanggal Selesai':selesai, 'Jumlah Hari':hari(),
         Status:'MENUNGGU', Lampiran: driveLinkLampiran || lampiranUrl || '',
       })
       setOk(true); refreshData()
@@ -1005,28 +1065,52 @@ const EmpAjukanIzin = ({ user, showToast, onBack, refreshData, dbData }) => {
       <div style={{ padding:'0 16px',display:'flex',flexDirection:'column',gap:12 }}>
         {err && <div style={{ background:'#FFF5F5',border:'1px solid #FFCDD2',color:'#C62828',fontSize:13,padding:'10px 14px',borderRadius:12 }}>{err}</div>}
         <Card style={{ padding:20,display:'flex',flexDirection:'column',gap:14 }}>
+
+          {/* ── Jenis Izin — 2 kolom atas + dropdown Izin Lainnya ── */}
           <div>
             <label style={{ fontSize:12,fontWeight:700,color:'#666',display:'block',marginBottom:8 }}>Jenis Izin</label>
-            <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:10 }}>
-              {['Izin Sakit','Izin Lainnya'].map(j=>(
-                <button key={j} onClick={()=>setForm({...form,jenis:j})} style={{ padding:'14px 8px',borderRadius:14,border:`2px solid ${form.jenis===j?'#E53935':'#e0e0e0'}`,background:form.jenis===j?'#FFF5F5':'white',cursor:'pointer',fontWeight:700,fontSize:13,color:form.jenis===j?'#E53935':'#888' }}>
-                  {j==='Izin Sakit'?'🏥':'📋'}<br/><span style={{ fontSize:12 }}>{j}</span>
+            <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:8 }}>
+              {['Izin Sakit','Izin Terlambat','Izin Setengah Hari','Izin Lembur'].map(j=>(
+                <button key={j} onClick={()=>setForm(f=>({...f,jenis:j}))} style={{ padding:'12px 6px',borderRadius:12,border:`2px solid ${form.jenis===j?JENIS_INFO[j].warna:'#e0e0e0'}`,background:form.jenis===j?`${JENIS_INFO[j].warna}11`:'white',cursor:'pointer',fontWeight:700,fontSize:12,color:form.jenis===j?JENIS_INFO[j].warna:'#888',textAlign:'center',lineHeight:1.4 }}>
+                  <span style={{ display:'block',fontSize:20,marginBottom:3 }}>{JENIS_INFO[j].icon}</span>{j}
                 </button>
               ))}
             </div>
+            {/* Izin Lainnya sebagai opsi terakhir */}
+            <button onClick={()=>setForm(f=>({...f,jenis:'Izin Lainnya'}))} style={{ width:'100%',padding:'11px 14px',borderRadius:12,border:`2px solid ${form.jenis==='Izin Lainnya'?'#555':'#e0e0e0'}`,background:form.jenis==='Izin Lainnya'?'#f5f5f5':'white',cursor:'pointer',fontWeight:700,fontSize:12,color:form.jenis==='Izin Lainnya'?'#333':'#888',textAlign:'left',display:'flex',alignItems:'center',gap:8 }}>
+              <span style={{ fontSize:18 }}>📋</span> Izin Lainnya
+            </button>
           </div>
-          {[['Tanggal Mulai','mulai'],['Tanggal Selesai','selesai']].map(([lbl,k])=>(
-            <div key={k}><label style={{ fontSize:12,fontWeight:700,color:'#666',display:'block',marginBottom:6 }}>{lbl}</label>
-              <input type="date" value={form[k]} onChange={set(k)} style={{ width:'100%',border:'1px solid #e0e0e0',borderRadius:12,padding:'10px 12px',fontSize:13,outline:'none',boxSizing:'border-box' }}/>
+
+          {/* Hint konteks jenis izin yang dipilih */}
+          {info && (
+            <div style={{ background:`${info.warna}11`,border:`1px solid ${info.warna}44`,borderRadius:10,padding:'9px 12px',display:'flex',gap:8,alignItems:'flex-start' }}>
+              <span style={{ fontSize:15,flexShrink:0 }}>{info.icon}</span>
+              <p style={{ fontSize:12,color:info.warna,fontWeight:600,margin:0,lineHeight:1.5 }}>{info.hint}</p>
             </div>
-          ))}
-          <div><label style={{ fontSize:12,fontWeight:700,color:'#666',display:'block',marginBottom:6 }}>Jumlah Hari</label>
+          )}
+
+          {/* Tanggal — 1 hari saja untuk Terlambat/Setengah/Lembur */}
+          <div>
+            <label style={{ fontSize:12,fontWeight:700,color:'#666',display:'block',marginBottom:6 }}>Tanggal {IS_ONE_DAY ? '' : 'Mulai'}</label>
+            <input type="date" value={form.mulai} onChange={set('mulai')} style={{ width:'100%',border:'1px solid #e0e0e0',borderRadius:12,padding:'10px 12px',fontSize:13,outline:'none',boxSizing:'border-box' }}/>
+          </div>
+          {!IS_ONE_DAY && (
+            <div>
+              <label style={{ fontSize:12,fontWeight:700,color:'#666',display:'block',marginBottom:6 }}>Tanggal Selesai</label>
+              <input type="date" value={form.selesai} min={form.mulai} onChange={set('selesai')} style={{ width:'100%',border:'1px solid #e0e0e0',borderRadius:12,padding:'10px 12px',fontSize:13,outline:'none',boxSizing:'border-box' }}/>
+            </div>
+          )}
+          <div>
+            <label style={{ fontSize:12,fontWeight:700,color:'#666',display:'block',marginBottom:6 }}>Jumlah Hari</label>
             <div style={{ border:'1px solid #e0e0e0',borderRadius:12,padding:'10px 12px',background:'#fafafa',fontSize:13,fontWeight:700,color:'#555' }}>{hari()} hari</div>
           </div>
-          <div><label style={{ fontSize:12,fontWeight:700,color:'#666',display:'block',marginBottom:6 }}>Alasan</label>
+          <div>
+            <label style={{ fontSize:12,fontWeight:700,color:'#666',display:'block',marginBottom:6 }}>Alasan</label>
             <textarea value={form.alasan} onChange={set('alasan')} rows={3} maxLength={200} placeholder="Tuliskan alasan izin..." style={{ width:'100%',border:'1px solid #e0e0e0',borderRadius:12,padding:'10px 12px',fontSize:13,outline:'none',resize:'none',boxSizing:'border-box' }}/>
           </div>
         </Card>
+
         <Card style={{ padding:16 }}>
           <div style={{ display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10 }}>
             <div>
@@ -1035,12 +1119,7 @@ const EmpAjukanIzin = ({ user, showToast, onBack, refreshData, dbData }) => {
             </div>
             <BtnGrad small onClick={()=>fileRef.current.click()}>{lampiran?'Ganti':'Upload'}</BtnGrad>
           </div>
-          <input ref={fileRef} type="file" accept="image/*,.pdf" style={{ display:'none' }} onChange={e=>{
-            const f = e.target.files[0]
-            if (!f) return
-            if (f.size > 5 * 1024 * 1024) { showToast('❌ Ukuran file maksimal 5MB'); return }
-            setLampiran(f)
-          }}/>
+          <input ref={fileRef} type="file" accept="image/*,.pdf" style={{ display:'none' }} onChange={e=>{ const f=e.target.files[0]; if(!f) return; if(f.size>5*1024*1024){showToast('❌ Ukuran file maksimal 5MB');return}; setLampiran(f) }}/>
           {lampiran
             ? <div style={{ display:'flex',alignItems:'center',gap:10,background:'#F0FFF4',padding:'10px 14px',borderRadius:10 }}><span>📄</span><span style={{ fontSize:12,fontWeight:600,color:'#2E7D32',flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap' }}>{lampiran.name}</span></div>
             : <div style={{ border:'2px dashed #e0e0e0',borderRadius:12,padding:20,textAlign:'center',color:'#ccc',fontSize:13 }}>Belum ada lampiran</div>}
@@ -1735,9 +1814,24 @@ const HRDApproval = ({ user, showToast, dbData, refreshData }) => {
     if(!error){
       if(action==='approve'){
         const emp = dbData.karyawan.find(k=>k.nip===selectedItem.nip)
-        if(emp) await supabase.from('master_karyawan').update({ sisa_izin:Math.max(0,(emp.sisa_izin??0)-selectedItem.jumlah_hari) }).eq('nip',selectedItem.nip)
+        // Jenis Izin Terlambat/Setengah/Lembur tidak kurangi sisa_izin (bukan izin hari penuh)
+        const IS_HARI_PENUH = ['Izin Sakit','Izin Lainnya'].includes(selectedItem.jenis_izin)
+        if(emp && IS_HARI_PENUH) await supabase.from('master_karyawan').update({ sisa_izin:Math.max(0,(emp.sisa_izin??0)-selectedItem.jumlah_hari) }).eq('nip',selectedItem.nip)
+
+        // Izin Terlambat disetujui → reset keterlambatan di rekap absensi hari itu
+        if(selectedItem.jenis_izin === 'Izin Terlambat'){
+          await supabase.from('attendance')
+            .update({ menit_terlambat:0, status_kehadiran:'HADIR' })
+            .eq('nip', selectedItem.nip)
+            .eq('tanggal', selectedItem.tanggal_mulai)
+          // Update Sheets juga (telat jadi 0)
+          logToSheet('absensi', { NIP:selectedItem.nip, Tanggal:selectedItem.tanggal_mulai }, {
+            NIP:selectedItem.nip, Nama:selectedItem.nama, Tanggal:selectedItem.tanggal_mulai,
+            'Jam Masuk':'', 'Jam Keluar':'', 'Telat (menit)':0, 'Foto Masuk':'', 'Foto Keluar':'',
+          })
+        }
       }
-      await supabase.from('audit_log').insert({ user_name:user.nama,nip:user.nip,aktivitas:`${action==='approve'?'Setujui':'Tolak'} izin ${selectedItem.nama}`,keterangan:`${selectedItem.jenis_izin} ${selectedItem.jumlah_hari} hari` })
+      await supabase.from('audit_log').insert({ user_name:user.nama,nip:user.nip,aktivitas:`${action==='approve'?'Setujui':'Tolak'} ${selectedItem.jenis_izin} ${selectedItem.nama}`,keterangan:`${selectedItem.tanggal_mulai}` })
       await supabase.from('notifications').insert({ nip:selectedItem.nip,type:'IZIN',message:`Pengajuan izin Anda ${action==='approve'?'disetujui':'ditolak'} oleh HRD` })
       // Update baris yang sama di Sheets (key = ID izin) dengan status terbaru
       logToSheet('izin', { ID: selectedItem.id }, {
