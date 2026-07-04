@@ -1233,15 +1233,43 @@ const EmpNav = ({ active, onChange }) => (
 // ─── HRD DASHBOARD ────────────────────────────────────────────────────────────
 const HRDDashboard = ({ user, showToast, onNavChange, dbData, refreshData }) => {
   const [showNotif, setShowNotif] = useState(false)
-  const total = dbData.karyawan.length
-  const sedangIzin = dbData.karyawan.filter(k=>k.status==='izin').length
-  const today = new Date().toISOString().split('T')[0]
-  const todayAtt = dbData.attendance.filter(a=>a.tanggal===today)
-  const hadir    = todayAtt.filter(a=>['HADIR','WFH'].includes(a.status_kehadiran)).length
-  const terlambat= todayAtt.filter(a=>a.status_kehadiran==='TERLAMBAT').length
-  const belumAbsen = Math.max(0, total - todayAtt.length)
-  const menungguIzin = dbData.izin.filter(c=>c.status==='MENUNGGU').length
-  const kehadiran = [{d:'Sen',v:88},{d:'Sel',v:92},{d:'Rab',v:85},{d:'Kam',v:95},{d:'Jum',v:78}]
+  const [showBelumAbsen, setShowBelumAbsen] = useState(false)
+
+  const todayWIBDate = new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Jakarta'}))
+  const today = `${todayWIBDate.getFullYear()}-${String(todayWIBDate.getMonth()+1).padStart(2,'0')}-${String(todayWIBDate.getDate()).padStart(2,'0')}`
+  const todayAtt    = dbData.attendance.filter(a=>a.tanggal===today)
+  const total       = dbData.karyawan.length
+  const sedangIzin  = dbData.karyawan.filter(k=>k.status==='izin').length
+  const hadir       = todayAtt.filter(a=>['HADIR','WFH'].includes(a.status_kehadiran)).length
+  const terlambat   = todayAtt.filter(a=>a.status_kehadiran==='TERLAMBAT').length
+  const sudahAbsenNip  = new Set(todayAtt.map(a=>a.nip))
+  const belumAbsenList = dbData.karyawan.filter(k=>k.role!=='hrd'&&!sudahAbsenNip.has(k.nip))
+  const belumAbsen     = belumAbsenList.length
+  const menungguIzin   = dbData.izin.filter(c=>c.status==='MENUNGGU').length
+  // ── Persentase kehadiran 5 hari kerja minggu ini (dari data nyata) ──
+  const todayWIB = new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Jakarta'}))
+  const dayOfWeek = todayWIB.getDay() // 0=minggu
+  // Cari Senin minggu ini
+  const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek
+  const monday = new Date(todayWIB)
+  monday.setDate(todayWIB.getDate() + diffToMonday)
+
+  const totalKaryawan = dbData.karyawan.filter(k=>k.role!=='hrd').length
+
+  const kehadiran = ['Sen','Sel','Rab','Kam','Jum'].map((label, i) => {
+    const tgl = new Date(monday)
+    tgl.setDate(monday.getDate() + i)
+    const tglStr = `${tgl.getFullYear()}-${String(tgl.getMonth()+1).padStart(2,'0')}-${String(tgl.getDate()).padStart(2,'0')}`
+    const isFuture = tglStr > today
+    if (isFuture) return { d: label, v: null, tgl: tglStr }
+    const hadirHari = dbData.attendance.filter(a =>
+      a.tanggal === tglStr && ['HADIR','WFH','TERLAMBAT'].includes(a.status_kehadiran)
+    ).length
+    const persen = totalKaryawan > 0 ? Math.round(hadirHari / totalKaryawan * 100) : 0
+    return { d: label, v: persen, tgl: tglStr }
+  })
+  const hadirDays = kehadiran.filter(k => k.v !== null)
+  const avgKehadiran = hadirDays.length > 0 ? Math.round(hadirDays.reduce((s,k)=>s+k.v,0)/hadirDays.length) : 0
 
   return (
     <div style={{ flex:1,overflowY:'auto',paddingBottom:80,background:'#F8F8F8' }}>
@@ -1279,30 +1307,60 @@ const HRDDashboard = ({ user, showToast, onNavChange, dbData, refreshData }) => 
             <span style={{ fontSize:11,color:'#aaa' }}>{today}</span>
           </div>
           <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:10 }}>
-            {[['Hadir',hadir,'#E8F5E9','#2E7D32'],['Terlambat',terlambat,'#FFF8E1','#F57F17'],['Belum Absen',belumAbsen,'#F5F5F5','#757575']].map(([l,v,bg,c])=>(
+            {[['Hadir',hadir,'#E8F5E9','#2E7D32'],['Terlambat',terlambat,'#FFF8E1','#F57F17']].map(([l,v,bg,c])=>(
               <div key={l} style={{ borderRadius:12,padding:10,textAlign:'center',background:bg }}><p style={{ fontSize:20,fontWeight:800,color:c,margin:0 }}>{v}</p><p style={{ fontSize:11,fontWeight:600,color:c,margin:0 }}>{l}</p></div>
             ))}
+            <button onClick={()=>setShowBelumAbsen(true)} style={{ borderRadius:12,padding:10,textAlign:'center',background:'#FFEBEE',border:'none',cursor:'pointer' }}>
+              <p style={{ fontSize:20,fontWeight:800,color:'#C62828',margin:0 }}>{belumAbsen}</p>
+              <p style={{ fontSize:11,fontWeight:600,color:'#C62828',margin:0 }}>Belum Absen</p>
+            </button>
           </div>
         </Card>
         <Card style={{ padding:16 }}>
-          <p style={{ fontWeight:800,margin:'0 0 12px' }}>Persentase Kehadiran Mingguan</p>
+          <p style={{ fontWeight:800,margin:'0 0 12px' }}>Persentase Kehadiran Minggu Ini</p>
           <div style={{ display:'flex',alignItems:'flex-end',gap:8,height:80 }}>
-            {kehadiran.map(k=>(
-              <div key={k.d} style={{ flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:4 }}>
-                <span style={{ fontSize:10,color:'#aaa' }}>{k.v}%</span>
-                <div style={{ width:'100%',borderRadius:'6px 6px 0 0',background:'linear-gradient(180deg,#E53935,#F5A623)',height:`${k.v*0.6}px` }}/>
-                <span style={{ fontSize:11,color:'#888' }}>{k.d}</span>
-              </div>
-            ))}
+            {kehadiran.map(k=>{
+              const isFuture = k.v === null
+              const barH = isFuture ? 0 : Math.max(4, k.v * 0.6)
+              const isToday = k.tgl === today
+              return (
+                <div key={k.d} style={{ flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:4 }}>
+                  <span style={{ fontSize:10,color: isFuture?'#ddd':'#aaa' }}>{isFuture?'-':`${k.v}%`}</span>
+                  <div style={{ width:'100%',borderRadius:'6px 6px 0 0',background: isFuture?'#f0f0f0':'linear-gradient(180deg,#E53935,#F5A623)',height:`${barH}px`,transition:'height 0.3s' }}/>
+                  <span style={{ fontSize:11,fontWeight:isToday?800:400,color:isToday?'#E53935':'#888' }}>{k.d}</span>
+                </div>
+              )
+            })}
           </div>
-          <p style={{ fontSize:11,color:'#aaa',margin:'8px 0 0',textAlign:'center' }}>Rata-rata: {Math.round(kehadiran.reduce((s,k)=>s+k.v,0)/kehadiran.length)}% minggu ini</p>
+          <p style={{ fontSize:11,color:'#aaa',margin:'8px 0 0',textAlign:'center' }}>
+            Rata-rata: {hadirDays.length > 0 ? `${avgKehadiran}%` : '-'} minggu ini
+          </p>
         </Card>
       </div>
+
+      {showBelumAbsen && (
+        <Modal title={`Belum Absen — ${today}`} onClose={()=>setShowBelumAbsen(false)} wide>
+          {belumAbsenList.length===0
+            ? <p style={{ textAlign:'center',color:'#aaa',fontSize:13,padding:16 }}>Semua karyawan sudah absen ✅</p>
+            : <div style={{ display:'flex',flexDirection:'column',gap:8 }}>
+                <p style={{ fontSize:12,color:'#aaa',margin:'0 0 4px' }}>{belumAbsenList.length} karyawan belum absen:</p>
+                {belumAbsenList.map((k,i)=>(
+                  <div key={i} style={{ display:'flex',alignItems:'center',gap:12,padding:'10px 14px',background:'#FFF5F5',borderRadius:12,border:'1px solid #FFCDD2' }}>
+                    <div style={{ width:36,height:36,borderRadius:'50%',background:'linear-gradient(135deg,#E53935,#F5A623)',display:'flex',alignItems:'center',justifyContent:'center',color:'white',fontWeight:700,fontSize:15,flexShrink:0 }}>{k.nama?.[0]}</div>
+                    <div style={{ flex:1 }}>
+                      <p style={{ fontWeight:700,fontSize:13,margin:0,color:'#C62828' }}>{k.nama}</p>
+                      <p style={{ fontSize:11,color:'#aaa',margin:0 }}>{k.nip} · {k.jabatan||'-'}</p>
+                    </div>
+                    <span style={{ fontSize:18 }}>❌</span>
+                  </div>
+                ))}
+              </div>
+          }
+        </Modal>
+      )}
     </div>
   )
-}
-
-// ─── HRD KARYAWAN ─────────────────────────────────────────────────────────────
+} ─────────────────────────────────────────────────────────────
 const HRDKaryawan = ({ user, showToast, dbData, refreshData }) => {
   const [search, setSearch] = useState('')
   const [filterDiv, setFilterDiv] = useState('Semua')
