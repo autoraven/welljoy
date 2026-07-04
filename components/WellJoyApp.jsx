@@ -531,8 +531,10 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
   const nowMenit = wibNow.getHours()*60 + wibNow.getMinutes()
   const keluarMenit = wkH*60 + wkM
 
-  // Clock Out terbuka kalau: sudah melewati jam keluar wajib, ATAU punya izin lembur hari ini (acc)
-  const clockOutTerbuka = clockedIn && !clockedOut && (nowMenit >= keluarMenit || hasIzinLembur)
+  // Clock Out:
+  // - Sebelum jam keluar wajib (16:40) → selalu bisa (pulang cepat)
+  // - Setelah jam keluar wajib → HANYA bisa kalau punya Izin Lembur yang sudah di-approve
+  const clockOutTerbuka = clockedIn && !clockedOut && (nowMenit <= keluarMenit || hasIzinLembur)
 
   // ── Helper waktu WIB untuk handleClockIn/Out ──
   const getWIBString = (d = new Date()) => {
@@ -713,8 +715,7 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
     const { jam: jamStr, tanggal: tanggalWIB } = getWIBString()
     const [mH, mM] = todayAtt.jam_masuk.split(':').map(Number)
     const [kH, kM] = jamStr.split(':').map(Number)
-    const durMenit  = (kH*60+kM) - (mH*60+mM)
-    const lemburJam = Math.max(0, (durMenit - 540) / 60)
+    const durMenit = (kH*60+kM) - (mH*60+mM)
     const lokasiLabel  = loc?.label  || 'Tidak diketahui'
     const lokasiCoords = loc?.coords || null
 
@@ -723,7 +724,15 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
     const namaHari = ['minggu','senin','selasa','rabu','kamis','jumat','sabtu'][hariIdx]
     const jamKeluarWajib = emp[`jam_keluar_${namaHari}`] || emp.jam_keluar_wajib || '16:40'
     const [wkH, wkM] = jamKeluarWajib.split(':').map(Number)
-    const menitPulangCepat = Math.max(0, (wkH*60+wkM) - (kH*60+kM))
+    const keluarWajibMenit = wkH*60+wkM
+
+    // Lembur = selisih clock out dari jam keluar wajib (bukan dari 9 jam durasi)
+    // Hanya dihitung kalau clock out SETELAH jam keluar wajib
+    const lemburMenit = Math.max(0, (kH*60+kM) - keluarWajibMenit)
+    const lemburJam   = Math.round(lemburMenit / 60 * 100) / 100
+
+    // Pulang cepat = clock out SEBELUM jam keluar wajib
+    const menitPulangCepat = Math.max(0, keluarWajibMenit - (kH*60+kM))
 
     const path = `${tanggalWIB}/${user.nip}_keluar_${jamStr.replace(':','')}.jpg`
     const fotoUrl = await uploadFoto(foto, path)
@@ -793,10 +802,12 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
             <button onClick={()=>{
               if(!clockedIn){showToast('Lakukan Clock In dulu');return;}
               if(clockedOut){showToast('Sudah Clock Out hari ini');return;}
-              if(!clockOutTerbuka){showToast(`Clock Out buka jam ${jamWajibKeluarHari} WIB${hasIzinLembur?'':', ajukan Izin Lembur untuk lembur'}`);return;}
+              if(!clockOutTerbuka){showToast('Sudah lewat jam kerja. Ajukan Izin Lembur untuk lembur.');return;}
               setCamera({mode:'out',cb:handleClockOut})
-            }} style={{ display:'flex',flexDirection:'column',alignItems:'center',padding:'16px 8px',borderRadius:14,background:clockedOut?'#ccc':(!clockedIn||!clockOutTerbuka)?'#bbb':'#F5A623',color:'white',border:'none',cursor:'pointer',fontWeight:700,position:'relative' }}>
-              <span style={{ fontSize:24,marginBottom:4 }}>📷</span><span style={{ fontSize:13 }}>Clock Out</span>
+            }} style={{ display:'flex',flexDirection:'column',alignItems:'center',padding:'16px 8px',borderRadius:14,background:clockedOut?'#ccc':!clockOutTerbuka?'#bbb':'#F5A623',color:'white',border:'none',cursor:'pointer',fontWeight:700,position:'relative' }}>
+              <span style={{ fontSize:24,marginBottom:4 }}>📷</span>
+              <span style={{ fontSize:13 }}>Clock Out</span>
+              {!clockedOut && !clockOutTerbuka && nowMenit > keluarMenit && <span style={{ fontSize:9,marginTop:2,opacity:0.9 }}>Izin Lembur?</span>}
               {hasIzinLembur && clockedIn && !clockedOut && <span style={{ position:'absolute',top:6,right:6,fontSize:9,background:'#7B1FA2',borderRadius:99,padding:'2px 5px',fontWeight:700 }}>Lembur ✓</span>}
             </button>
           </div>
@@ -1660,18 +1671,30 @@ const HRDKaryawan = ({ user, showToast, dbData, refreshData }) => {
 
 // ─── HRD ABSENSI ──────────────────────────────────────────────────────────────
 const HRDAbsensi = ({ user, showToast, dbData, refreshData }) => {
-  const [tanggal, setTanggal] = useState(new Date().toISOString().split('T')[0])
+  const [tanggal, setTanggal] = useState(()=>{
+    const w = new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Jakarta'}))
+    return `${w.getFullYear()}-${String(w.getMonth()+1).padStart(2,'0')}-${String(w.getDate()).padStart(2,'0')}`
+  })
   const [search, setSearch] = useState('')
   const [fotoModal, setFotoModal] = useState(null)
+  const [showBelumAbsen, setShowBelumAbsen] = useState(false)
 
   const records = dbData.attendance.filter(a=>{
     const matchDate = a.tanggal===tanggal
     const matchSearch = !search||a.nama?.toLowerCase().includes(search.toLowerCase())||a.nip?.includes(search)
     return matchDate&&matchSearch
   })
-  const hadir      = records.filter(a=>['HADIR','WFH'].includes(a.status_kehadiran)).length
-  const terlambat  = records.filter(a=>a.status_kehadiran==='TERLAMBAT').length
-  const tidakHadir = records.filter(a=>['ALPHA','IZIN_SAKIT','IZIN_LAINNYA'].includes(a.status_kehadiran)).length
+
+  // Hitung statistik dari data yang sudah absen
+  const hadir     = records.filter(a=>['HADIR','WFH'].includes(a.status_kehadiran)).length
+  const terlambat = records.filter(a=>a.status_kehadiran==='TERLAMBAT').length
+
+  // Karyawan yang BELUM absen sama sekali (tidak ada record di tanggal itu)
+  const sudahAbsenNip = new Set(dbData.attendance.filter(a=>a.tanggal===tanggal).map(a=>a.nip))
+  const semuaKaryawan = dbData.karyawan.filter(k=>k.role!=='hrd')
+  const belumAbsenList = semuaKaryawan.filter(k=>!sudahAbsenNip.has(k.nip)&&(!search||k.nama?.toLowerCase().includes(search.toLowerCase())||k.nip?.includes(search)))
+  const belumAbsen = belumAbsenList.length
+
   const formatTgl  = tgl=>{ if(!tgl) return '-'; const d=new Date(tgl); return `${String(d.getDate()).padStart(2,'0')}-${String(d.getMonth()+1).padStart(2,'0')}-${d.getFullYear()}` }
 
   return (
@@ -1682,18 +1705,27 @@ const HRDAbsensi = ({ user, showToast, dbData, refreshData }) => {
       </div>
       <div style={{ padding:'0 16px',display:'flex',flexDirection:'column',gap:10 }}>
         <input type="date" value={tanggal} onChange={e=>setTanggal(e.target.value)} style={{ width:'100%',background:'white',border:'1px solid #e0e0e0',borderRadius:14,padding:'12px 14px',fontSize:13,outline:'none',boxSizing:'border-box' }}/>
+
+        {/* Statistik 3 kotak */}
         <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:10 }}>
-          {[['Hadir',hadir,'#E8F5E9','#2E7D32'],['Terlambat',terlambat,'#FFF8E1','#F57F17'],['Tidak Hadir',tidakHadir,'#FFEBEE','#C62828']].map(([l,v,bg,c])=>(
+          {[['Hadir',hadir,'#E8F5E9','#2E7D32'],['Terlambat',terlambat,'#FFF8E1','#F57F17']].map(([l,v,bg,c])=>(
             <div key={l} style={{ borderRadius:14,padding:12,textAlign:'center',background:bg }}>
               <p style={{ fontSize:22,fontWeight:800,color:c,margin:0 }}>{v}</p>
               <p style={{ fontSize:11,fontWeight:600,color:c,margin:0 }}>{l}</p>
             </div>
           ))}
+          {/* Belum Absen — bisa diklik untuk lihat siapa saja */}
+          <button onClick={()=>setShowBelumAbsen(true)} style={{ borderRadius:14,padding:12,textAlign:'center',background:'#FFEBEE',border:'none',cursor:'pointer' }}>
+            <p style={{ fontSize:22,fontWeight:800,color:'#C62828',margin:0 }}>{belumAbsen}</p>
+            <p style={{ fontSize:11,fontWeight:600,color:'#C62828',margin:0 }}>Belum Absen</p>
+          </button>
         </div>
+
         <div style={{ display:'flex',alignItems:'center',background:'white',border:'1px solid #e0e0e0',borderRadius:14,padding:'10px 14px',gap:8 }}>
           <span style={{ color:'#aaa' }}>🔍</span>
           <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Cari nama atau NIP..." style={{ flex:1,outline:'none',fontSize:13,border:'none',background:'transparent' }}/>
         </div>
+
         {records.length===0
           ? <Card style={{ padding:32,textAlign:'center' }}><p style={{ color:'#aaa',fontSize:13,margin:0 }}>Tidak ada data absensi untuk tanggal ini</p></Card>
           : records.map((a,i)=>{
@@ -1706,50 +1738,24 @@ const HRDAbsensi = ({ user, showToast, dbData, refreshData }) => {
                     <Chip status={a.status_kehadiran}/>
                   </div>
                   <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:10 }}>
-                    {/* Clock In */}
                     <div style={{ background:'#F0FFF4',borderRadius:12,padding:12 }}>
                       <p style={{ fontSize:11,color:'#aaa',margin:'0 0 4px',fontWeight:600 }}>🟢 Clock In</p>
                       <p style={{ fontSize:13,fontWeight:700,color:'#2E7D32',margin:0 }}>{a.jam_masuk?`${formatTgl(a.tanggal)} ${a.jam_masuk}`:'-'}</p>
-                      {a.lokasi_masuk && (
-                        <div style={{ display:'flex',alignItems:'flex-start',gap:4,marginTop:4 }}>
-                          <span style={{ fontSize:10,flexShrink:0,marginTop:1 }}>📍</span>
-                          <span style={{ fontSize:10,color:'#388E3C',lineHeight:1.3 }}>{a.lokasi_masuk}</span>
-                        </div>
-                      )}
-                      {a.koordinat_masuk && (
-                        <a href={`https://www.google.com/maps?q=${a.koordinat_masuk}`} target="_blank" rel="noreferrer"
-                          style={{ display:'inline-flex',alignItems:'center',gap:4,marginTop:6,fontSize:10,color:'#1565C0',fontWeight:600,textDecoration:'none',background:'#E3F2FD',padding:'3px 8px',borderRadius:6 }}>
-                          🗺️ Lihat Maps
-                        </a>
-                      )}
+                      {a.lokasi_masuk && <div style={{ display:'flex',alignItems:'flex-start',gap:4,marginTop:4 }}><span style={{ fontSize:10,flexShrink:0,marginTop:1 }}>📍</span><span style={{ fontSize:10,color:'#388E3C',lineHeight:1.3 }}>{a.lokasi_masuk}</span></div>}
+                      {a.koordinat_masuk && <a href={`https://www.google.com/maps?q=${a.koordinat_masuk}`} target="_blank" rel="noreferrer" style={{ display:'inline-flex',alignItems:'center',gap:4,marginTop:6,fontSize:10,color:'#1565C0',fontWeight:600,textDecoration:'none',background:'#E3F2FD',padding:'3px 8px',borderRadius:6 }}>🗺️ Lihat Maps</a>}
                       {a.foto_masuk
-                        ? <button onClick={()=>setFotoModal({url:a.foto_masuk,label:'Foto Clock In',lokasi:a.lokasi_masuk,coords:a.koordinat_masuk})}
-                            style={{ marginTop:6,display:'flex',alignItems:'center',gap:6,background:'none',border:'1px solid #C8E6C9',borderRadius:8,padding:'4px 10px',cursor:'pointer',fontSize:11,color:'#2E7D32',fontWeight:600 }}>
-                            <img src={a.foto_masuk} alt="" style={{ width:28,height:28,borderRadius:6,objectFit:'cover' }}/>Lihat Foto
-                          </button>
+                        ? <button onClick={()=>setFotoModal({url:a.foto_masuk,label:'Foto Clock In',lokasi:a.lokasi_masuk,coords:a.koordinat_masuk})} style={{ marginTop:6,display:'flex',alignItems:'center',gap:6,background:'none',border:'1px solid #C8E6C9',borderRadius:8,padding:'4px 10px',cursor:'pointer',fontSize:11,color:'#2E7D32',fontWeight:600 }}>
+                            <img src={a.foto_masuk} alt="" style={{ width:28,height:28,borderRadius:6,objectFit:'cover' }}/>Lihat Foto</button>
                         : <p style={{ fontSize:11,color:'#ccc',marginTop:6 }}>Tidak ada foto</p>}
                     </div>
-                    {/* Clock Out */}
                     <div style={{ background:'#FFF5F5',borderRadius:12,padding:12 }}>
                       <p style={{ fontSize:11,color:'#aaa',margin:'0 0 4px',fontWeight:600 }}>🔴 Clock Out</p>
                       <p style={{ fontSize:13,fontWeight:700,color:a.jam_keluar?'#C62828':'#aaa',margin:0 }}>{a.jam_keluar?`${formatTgl(a.tanggal)} ${a.jam_keluar}`:'Belum clock out'}</p>
-                      {a.lokasi_keluar && (
-                        <div style={{ display:'flex',alignItems:'flex-start',gap:4,marginTop:4 }}>
-                          <span style={{ fontSize:10,flexShrink:0,marginTop:1 }}>📍</span>
-                          <span style={{ fontSize:10,color:'#C62828',lineHeight:1.3 }}>{a.lokasi_keluar}</span>
-                        </div>
-                      )}
-                      {a.koordinat_keluar && (
-                        <a href={`https://www.google.com/maps?q=${a.koordinat_keluar}`} target="_blank" rel="noreferrer"
-                          style={{ display:'inline-flex',alignItems:'center',gap:4,marginTop:6,fontSize:10,color:'#1565C0',fontWeight:600,textDecoration:'none',background:'#E3F2FD',padding:'3px 8px',borderRadius:6 }}>
-                          🗺️ Lihat Maps
-                        </a>
-                      )}
+                      {a.lokasi_keluar && <div style={{ display:'flex',alignItems:'flex-start',gap:4,marginTop:4 }}><span style={{ fontSize:10,flexShrink:0,marginTop:1 }}>📍</span><span style={{ fontSize:10,color:'#C62828',lineHeight:1.3 }}>{a.lokasi_keluar}</span></div>}
+                      {a.koordinat_keluar && <a href={`https://www.google.com/maps?q=${a.koordinat_keluar}`} target="_blank" rel="noreferrer" style={{ display:'inline-flex',alignItems:'center',gap:4,marginTop:6,fontSize:10,color:'#1565C0',fontWeight:600,textDecoration:'none',background:'#E3F2FD',padding:'3px 8px',borderRadius:6 }}>🗺️ Lihat Maps</a>}
                       {a.foto_keluar
-                        ? <button onClick={()=>setFotoModal({url:a.foto_keluar,label:'Foto Clock Out',lokasi:a.lokasi_keluar,coords:a.koordinat_keluar})}
-                            style={{ marginTop:6,display:'flex',alignItems:'center',gap:6,background:'none',border:'1px solid #FFCDD2',borderRadius:8,padding:'4px 10px',cursor:'pointer',fontSize:11,color:'#C62828',fontWeight:600 }}>
-                            <img src={a.foto_keluar} alt="" style={{ width:28,height:28,borderRadius:6,objectFit:'cover' }}/>Lihat Foto
-                          </button>
+                        ? <button onClick={()=>setFotoModal({url:a.foto_keluar,label:'Foto Clock Out',lokasi:a.lokasi_keluar,coords:a.koordinat_keluar})} style={{ marginTop:6,display:'flex',alignItems:'center',gap:6,background:'none',border:'1px solid #FFCDD2',borderRadius:8,padding:'4px 10px',cursor:'pointer',fontSize:11,color:'#C62828',fontWeight:600 }}>
+                            <img src={a.foto_keluar} alt="" style={{ width:28,height:28,borderRadius:6,objectFit:'cover' }}/>Lihat Foto</button>
                         : <p style={{ fontSize:11,color:'#ccc',marginTop:6 }}>Tidak ada foto</p>}
                     </div>
                   </div>
@@ -1767,6 +1773,29 @@ const HRDAbsensi = ({ user, showToast, dbData, refreshData }) => {
             })
         }
       </div>
+
+      {/* Modal daftar karyawan belum absen */}
+      {showBelumAbsen && (
+        <Modal title={`Belum Absen — ${tanggal}`} onClose={()=>setShowBelumAbsen(false)} wide>
+          {belumAbsenList.length===0
+            ? <p style={{ textAlign:'center',color:'#aaa',fontSize:13,padding:16 }}>Semua karyawan sudah absen ✅</p>
+            : <div style={{ display:'flex',flexDirection:'column',gap:8 }}>
+                <p style={{ fontSize:12,color:'#aaa',margin:'0 0 4px' }}>{belumAbsenList.length} karyawan belum absen:</p>
+                {belumAbsenList.map((k,i)=>(
+                  <div key={i} style={{ display:'flex',alignItems:'center',gap:12,padding:'10px 14px',background:'#FFF5F5',borderRadius:12,border:'1px solid #FFCDD2' }}>
+                    <div style={{ width:36,height:36,borderRadius:'50%',background:'linear-gradient(135deg,#E53935,#F5A623)',display:'flex',alignItems:'center',justifyContent:'center',color:'white',fontWeight:700,fontSize:15,flexShrink:0 }}>{k.nama?.[0]}</div>
+                    <div style={{ flex:1 }}>
+                      <p style={{ fontWeight:700,fontSize:13,margin:0,color:'#C62828' }}>{k.nama}</p>
+                      <p style={{ fontSize:11,color:'#aaa',margin:0 }}>{k.nip} · {k.jabatan||'-'}</p>
+                    </div>
+                    <span style={{ fontSize:18 }}>❌</span>
+                  </div>
+                ))}
+              </div>
+          }
+        </Modal>
+      )}
+
       {fotoModal && (
         <Modal title={fotoModal.label} onClose={()=>setFotoModal(null)}>
           <img src={fotoModal.url} alt={fotoModal.label} style={{ width:'100%',borderRadius:14,objectFit:'cover',maxHeight:300 }}/>
@@ -1779,8 +1808,7 @@ const HRDAbsensi = ({ user, showToast, dbData, refreshData }) => {
               {fotoModal.coords && (
                 <div style={{ display:'flex',gap:8 }}>
                   <span style={{ fontSize:11,color:'#aaa',fontFamily:'monospace' }}>{fotoModal.coords}</span>
-                  <a href={`https://www.google.com/maps?q=${fotoModal.coords}`} target="_blank" rel="noreferrer"
-                    style={{ fontSize:11,color:'#1565C0',fontWeight:700,textDecoration:'none' }}>🗺️ Buka Maps</a>
+                  <a href={`https://www.google.com/maps?q=${fotoModal.coords}`} target="_blank" rel="noreferrer" style={{ fontSize:11,color:'#1565C0',fontWeight:700,textDecoration:'none' }}>🗺️ Buka Maps</a>
                 </div>
               )}
             </div>
