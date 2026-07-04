@@ -1360,7 +1360,8 @@ const HRDDashboard = ({ user, showToast, onNavChange, dbData, refreshData }) => 
       )}
     </div>
   )
-} ─────────────────────────────────────────────────────────────
+}
+
 const HRDKaryawan = ({ user, showToast, dbData, refreshData }) => {
   const [search, setSearch] = useState('')
   const [filterDiv, setFilterDiv] = useState('Semua')
