@@ -1156,7 +1156,7 @@ const EmpSlipGaji = ({ user, dbData, refreshData }) => {
     const fetchSlip = async () => {
       setLoadingSlip(true); setSlipErr(''); setSlip(null)
       try {
-        const res = await fetch(`/api/get-slip?nip=${encodeURIComponent(user.nip)}`)
+        const res = await fetch(`/api/get-slip?nip=${encodeURIComponent(user.nip.trim())}`)
         const j = await res.json()
         if (j.success) setSlip(j.slip)
         else setSlipErr(j.error || 'Data tidak ditemukan')

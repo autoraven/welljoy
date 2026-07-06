@@ -48,8 +48,9 @@ export async function GET(request) {
     // Data mulai index 1 (baris 6 di sheet)
     const dataRows = rows.slice(1)
 
-    // Cari baris yang NIP-nya cocok (case-insensitive, trim)
-    const row = dataRows.find(r => String(r[0]||'').trim().toLowerCase() === nip.trim().toLowerCase())
+    // Cari baris yang NIP-nya cocok (case-insensitive, trim spasi)
+    const nipCari = nip.trim().toLowerCase()
+    const row = dataRows.find(r => String(r[0]||'').trim().toLowerCase() === nipCari)
     if (!row) return Response.json({ error: `Data slip gaji untuk NIP "${nip}" tidak ditemukan di spreadsheet` }, { status: 404 })
 
     const slip = {
