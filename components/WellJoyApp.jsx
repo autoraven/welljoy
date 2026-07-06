@@ -1147,19 +1147,42 @@ const EmpSlipGaji = ({ user, dbData, refreshData }) => {
   const [tahun, setTahun] = useState(new Date().getFullYear())
   const [tab, setTab] = useState('Ringkasan')
   const [showNotif, setShowNotif] = useState(false)
-  const emp = dbData.karyawan.find(k=>k.nip===user.nip)||user
+  const [slip, setSlip] = useState(null)
+  const [loadingSlip, setLoadingSlip] = useState(false)
+  const [slipErr, setSlipErr] = useState('')
+
+  // Fetch data slip dari Google Sheets setiap kali bulan/tahun berubah
+  useEffect(() => {
+    const fetchSlip = async () => {
+      setLoadingSlip(true); setSlipErr(''); setSlip(null)
+      try {
+        const res = await fetch(`/api/get-slip?nip=${encodeURIComponent(user.nip)}`)
+        const j = await res.json()
+        if (j.success) setSlip(j.slip)
+        else setSlipErr(j.error || 'Data tidak ditemukan')
+      } catch (e) { setSlipErr('Gagal memuat data slip') }
+      setLoadingSlip(false)
+    }
+    fetchSlip()
+  }, [user.nip, bulan, tahun])
+
   const records = dbData.attendance.filter(a=>{ const d=new Date(a.tanggal); return a.nip===user.nip&&d.getMonth()===bulan&&d.getFullYear()===tahun })
-  const p = calcPayroll(emp,records)
+  const hadirCount = records.filter(a=>['HADIR','WFH','TERLAMBAT'].includes(a.status_kehadiran)).length
+  const terlambatCount = records.filter(a=>a.status_kehadiran==='TERLAMBAT').length
+  const lemburTotal = records.reduce((s,a)=>s+(a.jam_lembur||0),0)
+
   const riwayat = [4,3,2,1,0].map(m=>{
     const mn=(new Date().getMonth()-m+12)%12
     const yr=new Date().getFullYear()-(new Date().getMonth()-m<0?1:0)
     const rec=dbData.attendance.filter(a=>{ const d=new Date(a.tanggal); return a.nip===user.nip&&d.getMonth()===mn&&d.getFullYear()===yr })
-    return { bulan:mn,tahun:yr,...calcPayroll(emp,rec) }
+    const hadir=rec.filter(a=>['HADIR','WFH','TERLAMBAT'].includes(a.status_kehadiran)).length
+    return { bulan:mn, tahun:yr, hadir }
   })
+
   return (
     <div style={{ flex:1,overflowY:'auto',paddingBottom:80,background:'#F8F8F8' }}>
       <div style={{ display:'flex',alignItems:'center',justifyContent:'space-between',padding:'24px 16px 0' }}>
-        <div><h1 style={{ fontWeight:800,fontSize:18,margin:0 }}>Slip Gaji</h1><p style={{ fontSize:11,color:'#aaa',margin:0 }}>Rincian gaji berdasarkan absensi</p></div>
+        <div><h1 style={{ fontWeight:800,fontSize:18,margin:0 }}>Slip Gaji</h1><p style={{ fontSize:11,color:'#aaa',margin:0 }}>Data dari rekap absensi bulan berjalan</p></div>
         <NotifBell nip={user.nip} onOpen={()=>setShowNotif(true)} notifications={dbData.notifications}/>
         {showNotif && <NotifPanel nip={user.nip} onClose={()=>setShowNotif(false)} notifications={dbData.notifications}
           onMarkRead={async id=>{ await supabase.from('notifications').update({is_read:true}).eq('id',id); refreshData() }}
@@ -1173,43 +1196,89 @@ const EmpSlipGaji = ({ user, dbData, refreshData }) => {
           <select value={bulan} onChange={e=>setBulan(Number(e.target.value))} style={{ flex:1,background:'white',border:'1px solid #e0e0e0',borderRadius:12,padding:'10px 12px',fontSize:13,outline:'none' }}>{BNAME.map((b,i)=><option key={i} value={i}>{b}</option>)}</select>
           <select value={tahun} onChange={e=>setTahun(Number(e.target.value))} style={{ width:80,background:'white',border:'1px solid #e0e0e0',borderRadius:12,padding:'10px 12px',fontSize:13,outline:'none' }}>{[2024,2025,2026].map(y=><option key={y}>{y}</option>)}</select>
         </div>
+
         {tab==='Ringkasan' && <>
-          <div style={{ borderRadius:16,padding:20,background:'linear-gradient(135deg,#FFF8E1,#FFF3CD)',position:'relative',overflow:'hidden' }}>
-            <p style={{ fontSize:13,color:'#777',margin:0 }}>Take Home Pay</p>
-            <p style={{ fontSize:28,fontWeight:800,color:'#E53935',margin:'4px 0 2px' }}>{formatRp(p.takeHomePay)}</p>
-            <p style={{ fontSize:11,color:'#888',margin:0 }}>{BNAME[bulan]} {tahun}</p>
-            <span style={{ position:'absolute',right:16,top:'50%',transform:'translateY(-50%)',fontSize:48,opacity:0.3 }}>💰</span>
-          </div>
-          <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:10 }}>
-            {[['Hadir',p.hadir,'hari','#E8F5E9','#2E7D32'],['Terlambat',p.terlambat,'hari','#FFF8E1','#F57F17'],['Lembur',p.totalLembur.toFixed(1),'jam','#E3F2FD','#1565C0']].map(([l,v,u,bg,c])=>(
-              <Card key={l} style={{ padding:12,textAlign:'center',background:bg,boxShadow:'none' }}><p style={{ fontSize:11,color:'#aaa',margin:'0 0 4px' }}>{l}</p><p style={{ fontWeight:800,fontSize:18,color:c,margin:0 }}>{v}</p><p style={{ fontSize:11,color:c,margin:0 }}>{u}</p></Card>
-            ))}
-          </div>
-          <Card style={{ padding:16 }}>
-            <p style={{ fontWeight:700,fontSize:13,color:'#43A047',margin:'0 0 12px' }}>PENGHASILAN</p>
-            {[['Gaji Pokok',emp.gaji_pokok||0],['Tunjangan Jabatan',emp.tunjangan_jabatan||0],['Tunjangan Transport',emp.tunjangan_transport||0],['Tunjangan Makan',emp.tunjangan_makan||0],['Bonus Lembur',p.bonusLembur]].map(([k,v])=>(
-              <div key={k} style={{ display:'flex',justifyContent:'space-between',padding:'6px 0',borderBottom:'1px solid #f5f5f5',fontSize:13 }}><span style={{ color:'#777' }}>{k}</span><span style={{ fontWeight:600,color:'#43A047' }}>+{formatRp(v)}</span></div>
-            ))}
-            <div style={{ display:'flex',justifyContent:'space-between',padding:'8px 0 0',fontWeight:700,fontSize:13 }}><span style={{ color:'#43A047' }}>Total Penghasilan</span><span style={{ color:'#43A047' }}>{formatRp(p.totalPenghasilan)}</span></div>
-          </Card>
-          <Card style={{ padding:16 }}>
-            <p style={{ fontWeight:700,fontSize:13,color:'#E53935',margin:'0 0 12px' }}>POTONGAN</p>
-            {[['BPJS Kesehatan',emp.bpjs_kesehatan||0],['BPJS Ketenagakerjaan',emp.bpjs_ketenagakerjaan||0],['PPh 21',emp.pph21||0],['Potongan Terlambat',p.potTerlambat],['Potongan Alpha',p.potAlpha]].map(([k,v])=>(
-              <div key={k} style={{ display:'flex',justifyContent:'space-between',padding:'6px 0',borderBottom:'1px solid #f5f5f5',fontSize:13 }}><span style={{ color:'#777' }}>{k}</span><span style={{ fontWeight:600,color:'#E53935' }}>-{formatRp(v)}</span></div>
-            ))}
-            <div style={{ display:'flex',justifyContent:'space-between',padding:'8px 0 0',fontWeight:700,fontSize:13 }}><span style={{ color:'#E53935' }}>Total Potongan</span><span style={{ color:'#E53935' }}>-{formatRp(p.totalPotongan)}</span></div>
-          </Card>
-          <div style={{ borderRadius:14,padding:16,background:'#FFF8E1',display:'flex',justifyContent:'space-between',alignItems:'center' }}>
-            <span style={{ fontWeight:800,fontSize:14,color:'#555' }}>Take Home Pay</span>
-            <span style={{ fontWeight:800,fontSize:18,color:'#F5A623' }}>{formatRp(p.takeHomePay)}</span>
-          </div>
+          {/* Loading / Error state */}
+          {loadingSlip && (
+            <div style={{ textAlign:'center',padding:32,color:'#aaa',fontSize:13 }}>⏳ Memuat data slip...</div>
+          )}
+          {slipErr && !loadingSlip && (
+            <div style={{ background:'#FFF5F5',border:'1px solid #FFCDD2',borderRadius:12,padding:'12px 16px',fontSize:13,color:'#C62828' }}>⚠️ {slipErr}</div>
+          )}
+
+          {slip && !loadingSlip && <>
+            {/* Take Home Pay banner */}
+            <div style={{ borderRadius:16,padding:20,background:'linear-gradient(135deg,#FFF8E1,#FFF3CD)',position:'relative',overflow:'hidden' }}>
+              <p style={{ fontSize:13,color:'#777',margin:0 }}>Take Home Pay</p>
+              <p style={{ fontSize:28,fontWeight:800,color:'#E53935',margin:'4px 0 2px' }}>{formatRp(slip.takeHomePay)}</p>
+              <p style={{ fontSize:11,color:'#888',margin:0 }}>{BNAME[bulan]} {tahun}</p>
+              <p style={{ fontSize:11,color: slip.performaKedisiplinan==='Disiplin'?'#2E7D32':'#E65100',fontWeight:700,margin:'4px 0 0',background: slip.performaKedisiplinan==='Disiplin'?'#E8F5E9':'#FFF3E0',display:'inline-block',padding:'2px 8px',borderRadius:99 }}>{slip.performaKedisiplinan||'-'}</p>
+              <span style={{ position:'absolute',right:16,top:'50%',transform:'translateY(-50%)',fontSize:48,opacity:0.3 }}>💰</span>
+            </div>
+
+            {/* Statistik kehadiran lokal */}
+            <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:10 }}>
+              {[['Hadir',hadirCount,'hari','#E8F5E9','#2E7D32'],['Terlambat',terlambatCount,'hari','#FFF8E1','#F57F17'],['Lembur',slip.totalLembur.toFixed(1),'jam','#E3F2FD','#1565C0']].map(([l,v,u,bg,c])=>(
+                <Card key={l} style={{ padding:12,textAlign:'center',background:bg,boxShadow:'none' }}><p style={{ fontSize:11,color:'#aaa',margin:'0 0 4px' }}>{l}</p><p style={{ fontWeight:800,fontSize:18,color:c,margin:0 }}>{v}</p><p style={{ fontSize:11,color:c,margin:0 }}>{u}</p></Card>
+              ))}
+            </div>
+
+            {/* Penghasilan */}
+            <Card style={{ padding:16 }}>
+              <p style={{ fontWeight:700,fontSize:13,color:'#43A047',margin:'0 0 12px' }}>💰 PENGHASILAN</p>
+              {[
+                ['Gaji Pokok',          slip.gajiPokok],
+                ['Tunjangan Kedisiplinan', slip.tunjanganKedisiplinan],
+                ['Bonus Penjualan',     slip.bonusPenjualan],
+                ['Tunjangan Makan',     slip.tunjanganMakan],
+                ['Bonus Lembur',        slip.totalBonusLembur],
+              ].map(([k,v])=>(
+                <div key={k} style={{ display:'flex',justifyContent:'space-between',padding:'7px 0',borderBottom:'1px solid #f5f5f5',fontSize:13 }}>
+                  <span style={{ color:'#777' }}>{k}</span>
+                  <span style={{ fontWeight:600,color:'#43A047' }}>+{formatRp(v)}</span>
+                </div>
+              ))}
+              <div style={{ display:'flex',justifyContent:'space-between',padding:'10px 0 0',fontWeight:800,fontSize:13 }}>
+                <span style={{ color:'#43A047' }}>Total Penghasilan</span>
+                <span style={{ color:'#43A047' }}>{formatRp(slip.totalPenghasilan)}</span>
+              </div>
+            </Card>
+
+            {/* Potongan */}
+            <Card style={{ padding:16 }}>
+              <p style={{ fontWeight:700,fontSize:13,color:'#E53935',margin:'0 0 12px' }}>✂️ POTONGAN</p>
+              {[
+                ['Potongan Terlambat', slip.totalDendaTerlambat, `${slip.totalJumlahTerlambat||0}× / ${slip.totalTerlambatMenit||0} menit`],
+                ['Potongan Izin',      slip.totalDendaIzin,      `Sakit:${slip.totalIzinSakit||0} Terlambat:${slip.totalIzinTerlambat||0} Setengah:${slip.totalIzinSetengahHari||0} Lainnya:${slip.izinLainnya||0}`],
+                ['Potongan Alpha',     slip.totalDendaAlpha,     `${slip.totalAlpha||0} hari`],
+              ].map(([k,v,sub])=>(
+                <div key={k} style={{ padding:'7px 0',borderBottom:'1px solid #f5f5f5' }}>
+                  <div style={{ display:'flex',justifyContent:'space-between',fontSize:13 }}>
+                    <span style={{ color:'#777' }}>{k}</span>
+                    <span style={{ fontWeight:600,color:'#E53935' }}>-{formatRp(v)}</span>
+                  </div>
+                  {v > 0 && <p style={{ fontSize:10,color:'#aaa',margin:'2px 0 0' }}>{sub}</p>}
+                </div>
+              ))}
+              <div style={{ display:'flex',justifyContent:'space-between',padding:'10px 0 0',fontWeight:800,fontSize:13 }}>
+                <span style={{ color:'#E53935' }}>Total Potongan</span>
+                <span style={{ color:'#E53935' }}>-{formatRp(slip.totalDenda)}</span>
+              </div>
+            </Card>
+
+            {/* Take home pay bawah */}
+            <div style={{ borderRadius:14,padding:16,background:'#FFF8E1',display:'flex',justifyContent:'space-between',alignItems:'center' }}>
+              <span style={{ fontWeight:800,fontSize:14,color:'#555' }}>Take Home Pay</span>
+              <span style={{ fontWeight:800,fontSize:18,color:'#F5A623' }}>{formatRp(slip.takeHomePay)}</span>
+            </div>
+          </>}
         </>}
+
         {tab==='Riwayat' && (
           <Card>{riwayat.map((r,i)=>(
             <div key={i} style={{ display:'flex',alignItems:'center',gap:12,padding:16,borderBottom:'1px solid #f5f5f5' }}>
               <div style={{ width:40,height:40,borderRadius:12,background:'#FFE4E1',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0 }}>📅</div>
               <div style={{ flex:1 }}><p style={{ fontWeight:700,fontSize:13,margin:0 }}>{BNAME[r.bulan]} {r.tahun}</p><p style={{ fontSize:11,color:'#aaa',margin:0 }}>Hadir {r.hadir} hari</p></div>
-              <p style={{ fontWeight:700,fontSize:13,margin:0 }}>{formatRp(r.takeHomePay)}</p>
             </div>
           ))}</Card>
         )}
