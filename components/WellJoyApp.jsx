@@ -1234,14 +1234,18 @@ const EmpNav = ({ active, onChange }) => (
 const HRDDashboard = ({ user, showToast, onNavChange, dbData, refreshData }) => {
   const [showNotif, setShowNotif] = useState(false)
   const [showBelumAbsen, setShowBelumAbsen] = useState(false)
+  const [showHadir, setShowHadir] = useState(false)
+  const [showTerlambat, setShowTerlambat] = useState(false)
 
   const todayWIBDate = new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Jakarta'}))
   const today = `${todayWIBDate.getFullYear()}-${String(todayWIBDate.getMonth()+1).padStart(2,'0')}-${String(todayWIBDate.getDate()).padStart(2,'0')}`
   const todayAtt    = dbData.attendance.filter(a=>a.tanggal===today)
   const total       = dbData.karyawan.length
   const sedangIzin  = dbData.karyawan.filter(k=>k.status==='izin').length
-  const hadir       = todayAtt.filter(a=>['HADIR','WFH'].includes(a.status_kehadiran)).length
-  const terlambat   = todayAtt.filter(a=>a.status_kehadiran==='TERLAMBAT').length
+  const hadirList      = todayAtt.filter(a=>['HADIR','WFH'].includes(a.status_kehadiran))
+  const terlambatList  = todayAtt.filter(a=>a.status_kehadiran==='TERLAMBAT')
+  const hadir          = hadirList.length
+  const terlambat      = terlambatList.length
   const sudahAbsenNip  = new Set(todayAtt.map(a=>a.nip))
   const belumAbsenList = dbData.karyawan.filter(k=>k.role!=='hrd'&&!sudahAbsenNip.has(k.nip))
   const belumAbsen     = belumAbsenList.length
@@ -1307,9 +1311,14 @@ const HRDDashboard = ({ user, showToast, onNavChange, dbData, refreshData }) => 
             <span style={{ fontSize:11,color:'#aaa' }}>{today}</span>
           </div>
           <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:10 }}>
-            {[['Hadir',hadir,'#E8F5E9','#2E7D32'],['Terlambat',terlambat,'#FFF8E1','#F57F17']].map(([l,v,bg,c])=>(
-              <div key={l} style={{ borderRadius:12,padding:10,textAlign:'center',background:bg }}><p style={{ fontSize:20,fontWeight:800,color:c,margin:0 }}>{v}</p><p style={{ fontSize:11,fontWeight:600,color:c,margin:0 }}>{l}</p></div>
-            ))}
+            <button onClick={()=>setShowHadir(true)} style={{ borderRadius:12,padding:10,textAlign:'center',background:'#E8F5E9',border:'none',cursor:'pointer' }}>
+              <p style={{ fontSize:20,fontWeight:800,color:'#2E7D32',margin:0 }}>{hadir}</p>
+              <p style={{ fontSize:11,fontWeight:600,color:'#2E7D32',margin:0 }}>Hadir</p>
+            </button>
+            <button onClick={()=>setShowTerlambat(true)} style={{ borderRadius:12,padding:10,textAlign:'center',background:'#FFF8E1',border:'none',cursor:'pointer' }}>
+              <p style={{ fontSize:20,fontWeight:800,color:'#F57F17',margin:0 }}>{terlambat}</p>
+              <p style={{ fontSize:11,fontWeight:600,color:'#F57F17',margin:0 }}>Terlambat</p>
+            </button>
             <button onClick={()=>setShowBelumAbsen(true)} style={{ borderRadius:12,padding:10,textAlign:'center',background:'#FFEBEE',border:'none',cursor:'pointer' }}>
               <p style={{ fontSize:20,fontWeight:800,color:'#C62828',margin:0 }}>{belumAbsen}</p>
               <p style={{ fontSize:11,fontWeight:600,color:'#C62828',margin:0 }}>Belum Absen</p>
@@ -1337,6 +1346,54 @@ const HRDDashboard = ({ user, showToast, onNavChange, dbData, refreshData }) => 
           </p>
         </Card>
       </div>
+
+      {showHadir && (
+        <Modal title={`Hadir — ${today}`} onClose={()=>setShowHadir(false)} wide>
+          {hadirList.length===0
+            ? <p style={{ textAlign:'center',color:'#aaa',fontSize:13,padding:16 }}>Belum ada yang hadir hari ini</p>
+            : <div style={{ display:'flex',flexDirection:'column',gap:8 }}>
+                <p style={{ fontSize:12,color:'#aaa',margin:'0 0 4px' }}>{hadirList.length} karyawan hadir:</p>
+                {hadirList.map((a,i)=>{ const k=dbData.karyawan.find(x=>x.nip===a.nip); return (
+                  <div key={i} style={{ display:'flex',alignItems:'center',gap:12,padding:'10px 14px',background:'#F0FFF4',borderRadius:12,border:'1px solid #C8E6C9' }}>
+                    <div style={{ width:36,height:36,borderRadius:'50%',background:'linear-gradient(135deg,#43A047,#1B5E20)',display:'flex',alignItems:'center',justifyContent:'center',color:'white',fontWeight:700,fontSize:15,flexShrink:0 }}>{a.nama?.[0]}</div>
+                    <div style={{ flex:1 }}>
+                      <p style={{ fontWeight:700,fontSize:13,margin:0,color:'#2E7D32' }}>{a.nama}</p>
+                      <p style={{ fontSize:11,color:'#aaa',margin:0 }}>{a.nip} · {k?.jabatan||'-'}</p>
+                    </div>
+                    <div style={{ textAlign:'right' }}>
+                      <p style={{ fontSize:12,fontWeight:700,color:'#2E7D32',margin:0 }}>🟢 {a.jam_masuk}</p>
+                      {a.jam_keluar && <p style={{ fontSize:11,color:'#aaa',margin:0 }}>out {a.jam_keluar}</p>}
+                    </div>
+                  </div>
+                )})}
+              </div>
+          }
+        </Modal>
+      )}
+
+      {showTerlambat && (
+        <Modal title={`Terlambat — ${today}`} onClose={()=>setShowTerlambat(false)} wide>
+          {terlambatList.length===0
+            ? <p style={{ textAlign:'center',color:'#aaa',fontSize:13,padding:16 }}>Tidak ada yang terlambat hari ini 🎉</p>
+            : <div style={{ display:'flex',flexDirection:'column',gap:8 }}>
+                <p style={{ fontSize:12,color:'#aaa',margin:'0 0 4px' }}>{terlambatList.length} karyawan terlambat:</p>
+                {terlambatList.map((a,i)=>{ const k=dbData.karyawan.find(x=>x.nip===a.nip); return (
+                  <div key={i} style={{ display:'flex',alignItems:'center',gap:12,padding:'10px 14px',background:'#FFF8E1',borderRadius:12,border:'1px solid #FFE082' }}>
+                    <div style={{ width:36,height:36,borderRadius:'50%',background:'linear-gradient(135deg,#F57F17,#E65100)',display:'flex',alignItems:'center',justifyContent:'center',color:'white',fontWeight:700,fontSize:15,flexShrink:0 }}>{a.nama?.[0]}</div>
+                    <div style={{ flex:1 }}>
+                      <p style={{ fontWeight:700,fontSize:13,margin:0,color:'#E65100' }}>{a.nama}</p>
+                      <p style={{ fontSize:11,color:'#aaa',margin:0 }}>{a.nip} · {k?.jabatan||'-'}</p>
+                    </div>
+                    <div style={{ textAlign:'right' }}>
+                      <p style={{ fontSize:12,fontWeight:700,color:'#E65100',margin:0 }}>⏰ {a.jam_masuk}</p>
+                      <p style={{ fontSize:11,color:'#aaa',margin:0 }}>+{a.menit_terlambat} menit</p>
+                    </div>
+                  </div>
+                )})}
+              </div>
+          }
+        </Modal>
+      )}
 
       {showBelumAbsen && (
         <Modal title={`Belum Absen — ${today}`} onClose={()=>setShowBelumAbsen(false)} wide>
@@ -1737,6 +1794,8 @@ const HRDAbsensi = ({ user, showToast, dbData, refreshData }) => {
   const [search, setSearch] = useState('')
   const [fotoModal, setFotoModal] = useState(null)
   const [showBelumAbsen, setShowBelumAbsen] = useState(false)
+  const [showHadir, setShowHadir] = useState(false)
+  const [showTerlambat, setShowTerlambat] = useState(false)
 
   const records = dbData.attendance.filter(a=>{
     const matchDate = a.tanggal===tanggal
@@ -1744,9 +1803,10 @@ const HRDAbsensi = ({ user, showToast, dbData, refreshData }) => {
     return matchDate&&matchSearch
   })
 
-  // Hitung statistik dari data yang sudah absen
-  const hadir     = records.filter(a=>['HADIR','WFH'].includes(a.status_kehadiran)).length
-  const terlambat = records.filter(a=>a.status_kehadiran==='TERLAMBAT').length
+  const hadirList      = records.filter(a=>['HADIR','WFH'].includes(a.status_kehadiran))
+  const terlambatList  = records.filter(a=>a.status_kehadiran==='TERLAMBAT')
+  const hadir          = hadirList.length
+  const terlambat      = terlambatList.length
 
   // Karyawan yang BELUM absen sama sekali (tidak ada record di tanggal itu)
   const sudahAbsenNip = new Set(dbData.attendance.filter(a=>a.tanggal===tanggal).map(a=>a.nip))
@@ -1767,12 +1827,14 @@ const HRDAbsensi = ({ user, showToast, dbData, refreshData }) => {
 
         {/* Statistik 3 kotak */}
         <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:10 }}>
-          {[['Hadir',hadir,'#E8F5E9','#2E7D32'],['Terlambat',terlambat,'#FFF8E1','#F57F17']].map(([l,v,bg,c])=>(
-            <div key={l} style={{ borderRadius:14,padding:12,textAlign:'center',background:bg }}>
-              <p style={{ fontSize:22,fontWeight:800,color:c,margin:0 }}>{v}</p>
-              <p style={{ fontSize:11,fontWeight:600,color:c,margin:0 }}>{l}</p>
-            </div>
-          ))}
+          <button onClick={()=>setShowHadir(true)} style={{ borderRadius:14,padding:12,textAlign:'center',background:'#E8F5E9',border:'none',cursor:'pointer' }}>
+            <p style={{ fontSize:22,fontWeight:800,color:'#2E7D32',margin:0 }}>{hadir}</p>
+            <p style={{ fontSize:11,fontWeight:600,color:'#2E7D32',margin:0 }}>Hadir</p>
+          </button>
+          <button onClick={()=>setShowTerlambat(true)} style={{ borderRadius:14,padding:12,textAlign:'center',background:'#FFF8E1',border:'none',cursor:'pointer' }}>
+            <p style={{ fontSize:22,fontWeight:800,color:'#F57F17',margin:0 }}>{terlambat}</p>
+            <p style={{ fontSize:11,fontWeight:600,color:'#F57F17',margin:0 }}>Terlambat</p>
+          </button>
           {/* Belum Absen — bisa diklik untuk lihat siapa saja */}
           <button onClick={()=>setShowBelumAbsen(true)} style={{ borderRadius:14,padding:12,textAlign:'center',background:'#FFEBEE',border:'none',cursor:'pointer' }}>
             <p style={{ fontSize:22,fontWeight:800,color:'#C62828',margin:0 }}>{belumAbsen}</p>
@@ -1832,6 +1894,54 @@ const HRDAbsensi = ({ user, showToast, dbData, refreshData }) => {
             })
         }
       </div>
+
+      {showHadir && (
+        <Modal title={`Hadir — ${tanggal}`} onClose={()=>setShowHadir(false)} wide>
+          {hadirList.length===0
+            ? <p style={{ textAlign:'center',color:'#aaa',fontSize:13,padding:16 }}>Belum ada yang hadir di tanggal ini</p>
+            : <div style={{ display:'flex',flexDirection:'column',gap:8 }}>
+                <p style={{ fontSize:12,color:'#aaa',margin:'0 0 4px' }}>{hadirList.length} karyawan hadir:</p>
+                {hadirList.map((a,i)=>{ const k=dbData.karyawan.find(x=>x.nip===a.nip); return (
+                  <div key={i} style={{ display:'flex',alignItems:'center',gap:12,padding:'10px 14px',background:'#F0FFF4',borderRadius:12,border:'1px solid #C8E6C9' }}>
+                    <div style={{ width:36,height:36,borderRadius:'50%',background:'linear-gradient(135deg,#43A047,#1B5E20)',display:'flex',alignItems:'center',justifyContent:'center',color:'white',fontWeight:700,fontSize:15,flexShrink:0 }}>{a.nama?.[0]}</div>
+                    <div style={{ flex:1 }}>
+                      <p style={{ fontWeight:700,fontSize:13,margin:0,color:'#2E7D32' }}>{a.nama}</p>
+                      <p style={{ fontSize:11,color:'#aaa',margin:0 }}>{a.nip} · {k?.jabatan||'-'}</p>
+                    </div>
+                    <div style={{ textAlign:'right' }}>
+                      <p style={{ fontSize:12,fontWeight:700,color:'#2E7D32',margin:0 }}>🟢 {a.jam_masuk}</p>
+                      {a.jam_keluar && <p style={{ fontSize:11,color:'#aaa',margin:0 }}>out {a.jam_keluar}</p>}
+                    </div>
+                  </div>
+                )})}
+              </div>
+          }
+        </Modal>
+      )}
+
+      {showTerlambat && (
+        <Modal title={`Terlambat — ${tanggal}`} onClose={()=>setShowTerlambat(false)} wide>
+          {terlambatList.length===0
+            ? <p style={{ textAlign:'center',color:'#aaa',fontSize:13,padding:16 }}>Tidak ada yang terlambat di tanggal ini 🎉</p>
+            : <div style={{ display:'flex',flexDirection:'column',gap:8 }}>
+                <p style={{ fontSize:12,color:'#aaa',margin:'0 0 4px' }}>{terlambatList.length} karyawan terlambat:</p>
+                {terlambatList.map((a,i)=>{ const k=dbData.karyawan.find(x=>x.nip===a.nip); return (
+                  <div key={i} style={{ display:'flex',alignItems:'center',gap:12,padding:'10px 14px',background:'#FFF8E1',borderRadius:12,border:'1px solid #FFE082' }}>
+                    <div style={{ width:36,height:36,borderRadius:'50%',background:'linear-gradient(135deg,#F57F17,#E65100)',display:'flex',alignItems:'center',justifyContent:'center',color:'white',fontWeight:700,fontSize:15,flexShrink:0 }}>{a.nama?.[0]}</div>
+                    <div style={{ flex:1 }}>
+                      <p style={{ fontWeight:700,fontSize:13,margin:0,color:'#E65100' }}>{a.nama}</p>
+                      <p style={{ fontSize:11,color:'#aaa',margin:0 }}>{a.nip} · {k?.jabatan||'-'}</p>
+                    </div>
+                    <div style={{ textAlign:'right' }}>
+                      <p style={{ fontSize:12,fontWeight:700,color:'#E65100',margin:0 }}>⏰ {a.jam_masuk}</p>
+                      <p style={{ fontSize:11,color:'#aaa',margin:0 }}>+{a.menit_terlambat} menit</p>
+                    </div>
+                  </div>
+                )})}
+              </div>
+          }
+        </Modal>
+      )}
 
       {/* Modal daftar karyawan belum absen */}
       {showBelumAbsen && (
