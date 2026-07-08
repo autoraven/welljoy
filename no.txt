@@ -1,0 +1,29 @@
+Sekarang update route.js upload-drive supaya pakai OAuth2 (refresh token) bukan Service Account:Coba oauthCoba oauth3 file ini perlu ditaruh di lokasi berikut di repo-mu:
+File yang saya kirimTaruh di pathroute.jsapp/api/upload-drive/route.js (replace yang lama)google-auth-route.jsapp/api/auth/google/route.js (file baru)google-auth-callback-route.jsapp/api/auth/google/callback/route.js (file baru)
+Langkah setup (sekali saja):
+1. Buat OAuth Client ID di Google Cloud Console (project yang sama, virtual-indexer-496311-c3):
+
+Buka APIs & Services → Credentials → Create Credentials → OAuth client ID
+Kalau diminta, setup dulu OAuth consent screen (pilih "External", isi nama app seadanya, tambahkan emailmu sendiri sebagai Test user)
+Application type: Web application
+Authorized redirect URI: https://welljoy.vercel.app/api/auth/google/callback
+Setelah dibuat, copy Client ID dan Client Secret
+
+2. Set environment variable di Vercel:
+GOOGLE_OAUTH_CLIENT_ID=<client id>
+GOOGLE_OAUTH_CLIENT_SECRET=<client secret>
+GOOGLE_OAUTH_REDIRECT_URI=https://welljoy.vercel.app/api/auth/google/callback
+(belum perlu GOOGLE_OAUTH_REFRESH_TOKEN dulu)
+3. Push ketiga file di atas, deploy.
+4. Buka di browser: https://welljoy.vercel.app/api/auth/google
+
+Login dengan akun Google pribadimu (akun yang foldernya nanti dipakai)
+Klik Allow
+Akan muncul halaman menampilkan refresh_token — copy nilainya.
+
+5. Tambahkan ke Vercel env var:
+GOOGLE_OAUTH_REFRESH_TOKEN=<hasil copy>
+Redeploy.
+6. Pastikan folder Drive tujuan (yang ID-nya di GOOGLE_DRIVE_ROOT_FOLDER_ID) milik akun Google yang sama yang kamu pakai login di langkah 4 (folder di My Drive akun pribadimu, bukan punya service account lagi).
+7. Setelah upload jalan normal, hapus app/api/auth/google/ (kedua file) dari repo dan commit — supaya endpoint OAuth itu nggak bisa diakses orang lain lagi.
+Kalau ada error di proses ini (misalnya pas klik Allow, atau pas upload setelah refresh token diisi), kirim lagi log-nya ya.

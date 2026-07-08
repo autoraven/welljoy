@@ -696,7 +696,7 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
       // Catat ke Google Sheets (baris baru, jam keluar masih kosong — akan di-update saat clock out)
       logToSheet('absensi', { NIP:user.nip, Tanggal:tanggalWIB }, {
         NIP:user.nip, Nama:user.nama, Tanggal:tanggalWIB, 'Jam Masuk':jamStr, 'Jam Keluar':'',
-        'Telat (menit)':menit, 'Foto Masuk':driveLinkMasuk||'', 'Foto Keluar':'',
+        'Telat (menit)':menit, 'Lebih(menit)':0, 'Foto Masuk':driveLinkMasuk||'', 'Foto Keluar':'',
       })
       if (menit > 0) {
         showToast(`⚠️ Clock In berhasil — Telat ${menit} menit`)
@@ -755,6 +755,7 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
         NIP:user.nip, Nama:user.nama, Tanggal:tanggalWIB,
         'Jam Masuk':todayAtt.jam_masuk, 'Jam Keluar':jamStr,
         'Telat (menit)':todayAtt.menit_terlambat ?? 0,
+        'Lebih(menit)': lemburMenit,
         'Foto Masuk':todayAtt.foto_masuk_drive_link||'', 'Foto Keluar':driveLinkKeluar||'',
       })
       if (menitPulangCepat > 0) {
@@ -2093,7 +2094,7 @@ const HRDApproval = ({ user, showToast, dbData, refreshData }) => {
           // Update Sheets juga (telat jadi 0)
           logToSheet('absensi', { NIP:selectedItem.nip, Tanggal:selectedItem.tanggal_mulai }, {
             NIP:selectedItem.nip, Nama:selectedItem.nama, Tanggal:selectedItem.tanggal_mulai,
-            'Jam Masuk':'', 'Jam Keluar':'', 'Telat (menit)':0, 'Foto Masuk':'', 'Foto Keluar':'',
+            'Jam Masuk':'', 'Jam Keluar':'', 'Telat (menit)':0, 'Lebih(menit)':0, 'Foto Masuk':'', 'Foto Keluar':'',
           })
         }
       }
