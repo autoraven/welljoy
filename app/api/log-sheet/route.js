@@ -12,34 +12,36 @@ import { getSheetsClient } from '../../lib/google-auth'
 export const runtime = 'nodejs'
 
 // ── Definisi kolom per sheet ──
-// Urutan harus sama persis dengan urutan kolom di Google Sheet kamu (baris header).
+// `header` di sini cuma dipakai untuk MEMBUAT header awal kalau sheet masih kosong.
+// Untuk pemetaan nilai, kode SELALU baca ulang header row yang sebenarnya ada di sheet,
+// supaya tidak ketuker walau urutan kolom di sheet diubah manual.
 const SHEET_CONFIG = {
   absensi: {
     tabName: 'Absensi',
-    range: 'Absensi!A:H',
-    header: ['NIP', 'Nama', 'Tanggal', 'Jam Masuk', 'Jam Keluar', 'Telat (menit)', 'Foto Masuk', 'Foto Keluar'],
-    // Kolom yang dipakai untuk mencocokkan baris lama (index di array `header`, 0-based)
-    keyColumns: [0, 2], // NIP + Tanggal
+    defaultHeader: ['NIP', 'Nama', 'Tanggal', 'Jam Masuk', 'Jam Keluar', 'Telat (menit)', 'Lebih(menit)', 'Foto Masuk', 'Foto Keluar'],
+    keyColumnNames: ['NIP', 'Tanggal'],
   },
   izin: {
     tabName: 'Izin',
-    range: 'Izin!A:I',
-    header: ['ID', 'NIP', 'Nama', 'Jenis Izin', 'Tanggal Mulai', 'Tanggal Selesai', 'Jumlah Hari', 'Status', 'Lampiran'],
-    keyColumns: [0], // ID izin dari Supabase (unik)
+    defaultHeader: ['ID', 'NIP', 'Nama', 'Jenis Izin', 'Tanggal Mulai', 'Tanggal Selesai', 'Jumlah Hari', 'Status', 'Lampiran'],
+    keyColumnNames: ['ID'],
   },
 }
 
-async function ensureHeader(sheets, spreadsheetId, config) {
+// Ambil header row asli dari sheet. Kalau kosong, tulis defaultHeader dulu.
+async function getOrCreateHeader(sheets, spreadsheetId, config) {
   const res = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${config.tabName}!A1:Z1` })
-  const firstRow = res.data.values?.[0]
-  if (!firstRow || firstRow.length === 0) {
+  let header = res.data.values?.[0]
+  if (!header || header.length === 0) {
+    header = config.defaultHeader
     await sheets.spreadsheets.values.update({
       spreadsheetId,
       range: `${config.tabName}!A1`,
       valueInputOption: 'RAW',
-      requestBody: { values: [config.header] },
+      requestBody: { values: [header] },
     })
   }
+  return header
 }
 
 export async function POST(request) {
@@ -54,20 +56,28 @@ export async function POST(request) {
     if (!spreadsheetId) return Response.json({ error: 'GOOGLE_SHEET_ID belum diset' }, { status: 500 })
 
     const sheets = getSheetsClient()
-    await ensureHeader(sheets, spreadsheetId, config)
+    const header = await getOrCreateHeader(sheets, spreadsheetId, config) // header ASLI dari sheet, urutan apa adanya
 
-    // Susun baris baru sesuai urutan header
-    const newRowValues = config.header.map(col => row[col] ?? '')
+    const lastCol = colLetter(header.length)
+    const range = `${config.tabName}!A:${lastCol}`
+
+    // Susun baris sesuai urutan kolom ASLI di sheet (bukan asumsi tetap)
+    const newRowValues = header.map(colName => row[colName] ?? '')
 
     // Ambil semua data existing untuk cari baris yang cocok
-    const existing = await sheets.spreadsheets.values.get({ spreadsheetId, range: config.range })
+    const existing = await sheets.spreadsheets.values.get({ spreadsheetId, range })
     const rows = existing.data.values || []
+
+    const keyColIdx = config.keyColumnNames.map(name => header.indexOf(name))
+    if (keyColIdx.some(i => i === -1)) {
+      return Response.json({ error: `Kolom kunci (${config.keyColumnNames.join(', ')}) tidak ditemukan di header sheet "${config.tabName}". Cek nama header-nya.` }, { status: 400 })
+    }
 
     let matchIndex = -1 // index di array `rows` (0 = header)
     for (let i = 1; i < rows.length; i++) {
-      const isMatch = config.keyColumns.every(colIdx => {
-        const headerName = config.header[colIdx]
-        return String(rows[i][colIdx] ?? '') === String(key[headerName] ?? '')
+      const isMatch = config.keyColumnNames.every((name, idx) => {
+        const colI = keyColIdx[idx]
+        return String(rows[i][colI] ?? '') === String(key[name] ?? '')
       })
       if (isMatch) { matchIndex = i; break }
     }
@@ -77,25 +87,36 @@ export async function POST(request) {
       const targetRow = matchIndex + 1
       await sheets.spreadsheets.values.update({
         spreadsheetId,
-        range: `${config.tabName}!A${targetRow}`,
+        range: `${config.tabName}!A${targetRow}:${lastCol}${targetRow}`,
         valueInputOption: 'RAW',
         requestBody: { values: [newRowValues] },
       })
-      return Response.json({ success: true, action: 'updated', row: targetRow })
+      return Response.json({ success: true, action: 'updated', row: targetRow, header })
     } else {
       // Tambah baris baru
       await sheets.spreadsheets.values.append({
         spreadsheetId,
-        range: config.range,
+        range,
         valueInputOption: 'RAW',
         insertDataOption: 'INSERT_ROWS',
         requestBody: { values: [newRowValues] },
       })
-      return Response.json({ success: true, action: 'appended' })
+      return Response.json({ success: true, action: 'appended', header })
     }
   } catch (e) {
     const detail = e?.response?.data?.error || e?.errors || e.message
     console.error('[log-sheet] error:', JSON.stringify(detail, null, 2))
     return Response.json({ error: detail?.message || detail || 'Gagal mencatat ke Sheets' }, { status: 500 })
   }
+}
+
+// Konversi angka kolom (1, 2, ..., 27) jadi huruf kolom Sheets (A, B, ..., AA)
+function colLetter(n) {
+  let s = ''
+  while (n > 0) {
+    const m = (n - 1) % 26
+    s = String.fromCharCode(65 + m) + s
+    n = Math.floor((n - 1) / 26)
+  }
+  return s
 }
