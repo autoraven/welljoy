@@ -1523,25 +1523,43 @@ const HRDKaryawan = ({ user, showToast, dbData, refreshData }) => {
       const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg'
       const path = `profil/${selectedNIP}.${ext}`
 
-      // Upload via Supabase client supaya RLS/auth berjalan benar
-      const { error: upErr } = await supabase.storage
-        .from('foto-profil')
-        .upload(path, file, { upsert: true, contentType: file.type || 'image/jpeg' })
+      // Konversi File → base64 → Uint8Array (sama persis dengan uploadFoto absensi)
+      const base64 = await new Promise((res, rej) => {
+        const reader = new FileReader()
+        reader.onload = () => res(reader.result)
+        reader.onerror = () => rej(new Error('Gagal baca file'))
+        reader.readAsDataURL(file)
+      })
+      const b64data = base64.split(',')[1]
+      const bin = atob(b64data)
+      const bytes = new Uint8Array(bin.length)
+      for(let i=0;i<bin.length;i++) bytes[i] = bin.charCodeAt(i)
 
-      if(upErr){ console.error('[foto-profil] upload error:', upErr); showToast('❌ Gagal upload: '+upErr.message); setUploadingFoto(false); return }
+      const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL
+      const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+      const res = await fetch(`${SUPABASE_URL}/storage/v1/object/foto-profil/${path}`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${SUPABASE_KEY}`,
+          'apikey': SUPABASE_KEY,
+          'Content-Type': 'image/jpeg',
+          'x-upsert': 'true',
+        },
+        body: bytes,
+      })
 
-      // Ambil public URL
-      const { data: { publicUrl } } = supabase.storage.from('foto-profil').getPublicUrl(path)
+      if(!res.ok){
+        const errText = await res.text().catch(()=>'')
+        console.error('[foto-profil] upload error:', res.status, errText)
+        showToast('❌ Gagal upload: '+res.status)
+        setUploadingFoto(false); return
+      }
 
-      // Tambah cache-bust supaya browser tidak pakai foto lama
-      const fotoUrl = `${publicUrl}?t=${Date.now()}`
-
-      const { error: dbErr } = await supabase.from('master_karyawan').update({ foto_profil: fotoUrl }).eq('nip', selectedNIP)
-      if(dbErr){ showToast('❌ Gagal simpan URL foto'); setUploadingFoto(false); return }
-
+      const fotoUrl = `${SUPABASE_URL}/storage/v1/object/public/foto-profil/${path}?t=${Date.now()}`
+      await supabase.from('master_karyawan').update({ foto_profil: fotoUrl }).eq('nip', selectedNIP)
       showToast('✅ Foto profil diperbarui!')
       refreshData()
-    } catch(e){ console.error('[foto-profil] exception:', e); showToast('❌ Error: '+e.message) }
+    } catch(e){ console.error('[foto-profil]', e); showToast('❌ Error: '+e.message) }
     setUploadingFoto(false)
   }
 
