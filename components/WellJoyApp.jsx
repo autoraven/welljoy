@@ -1320,30 +1320,25 @@ const HRDDashboard = ({ user, showToast, onNavChange, dbData, refreshData }) => 
   const belumAbsenList = dbData.karyawan.filter(k=>k.role!=='hrd'&&!sudahAbsenNip.has(k.nip))
   const belumAbsen     = belumAbsenList.length
   const menungguIzin   = dbData.izin.filter(c=>c.status==='MENUNGGU').length
-  // ── Persentase kehadiran 5 hari kerja minggu ini (dari data nyata) ──
-  const todayWIB = new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Jakarta'}))
-  const dayOfWeek = todayWIB.getDay() // 0=minggu
-  // Cari Senin minggu ini
-  const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek
-  const monday = new Date(todayWIB)
-  monday.setDate(todayWIB.getDate() + diffToMonday)
+  // ── Persentase kehadiran per-tanggal bulan ini (scrollable) ──
+  const [chartBulan, setChartBulan] = useState(todayWIBDate.getMonth())
+  const [chartTahun, setChartTahun] = useState(todayWIBDate.getFullYear())
 
   const totalKaryawan = dbData.karyawan.filter(k=>k.role!=='hrd').length
-
-  const kehadiran = ['Sen','Sel','Rab','Kam','Jum'].map((label, i) => {
-    const tgl = new Date(monday)
-    tgl.setDate(monday.getDate() + i)
-    const tglStr = `${tgl.getFullYear()}-${String(tgl.getMonth()+1).padStart(2,'0')}-${String(tgl.getDate()).padStart(2,'0')}`
+  const daysInMonth = new Date(chartTahun, chartBulan+1, 0).getDate()
+  const kehadiranBulan = Array.from({length:daysInMonth},(_,i)=>{
+    const d = i+1
+    const tglStr = `${chartTahun}-${String(chartBulan+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`
     const isFuture = tglStr > today
-    if (isFuture) return { d: label, v: null, tgl: tglStr }
-    const hadirHari = dbData.attendance.filter(a =>
-      a.tanggal === tglStr && ['HADIR','WFH','TERLAMBAT'].includes(a.status_kehadiran)
-    ).length
-    const persen = totalKaryawan > 0 ? Math.round(hadirHari / totalKaryawan * 100) : 0
-    return { d: label, v: persen, tgl: tglStr }
+    const dayW = new Date(tglStr).getDay()
+    const isWeekend = dayW===0||dayW===6
+    if(isFuture||isWeekend) return { d, tglStr, v:null, isFuture, isWeekend }
+    const hadirHari = dbData.attendance.filter(a=>a.tanggal===tglStr&&['HADIR','WFH','TERLAMBAT'].includes(a.status_kehadiran)).length
+    const persen = totalKaryawan>0 ? Math.round(hadirHari/totalKaryawan*100) : 0
+    return { d, tglStr, v:persen, isFuture:false, isWeekend:false }
   })
-  const hadirDays = kehadiran.filter(k => k.v !== null)
-  const avgKehadiran = hadirDays.length > 0 ? Math.round(hadirDays.reduce((s,k)=>s+k.v,0)/hadirDays.length) : 0
+  const workDays = kehadiranBulan.filter(k=>!k.isWeekend&&!k.isFuture&&k.v!==null)
+  const avgKehadiran = workDays.length>0 ? Math.round(workDays.reduce((s,k)=>s+k.v,0)/workDays.length) : 0
 
   return (
     <div style={{ flex:1,overflowY:'auto',paddingBottom:80,background:'#F8F8F8' }}>
@@ -1396,23 +1391,38 @@ const HRDDashboard = ({ user, showToast, onNavChange, dbData, refreshData }) => 
           </div>
         </Card>
         <Card style={{ padding:16 }}>
-          <p style={{ fontWeight:800,margin:'0 0 12px' }}>Persentase Kehadiran Minggu Ini</p>
-          <div style={{ display:'flex',alignItems:'flex-end',gap:8,height:80 }}>
-            {kehadiran.map(k=>{
-              const isFuture = k.v === null
-              const barH = isFuture ? 0 : Math.max(4, k.v * 0.6)
-              const isToday = k.tgl === today
-              return (
-                <div key={k.d} style={{ flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:4 }}>
-                  <span style={{ fontSize:10,color: isFuture?'#ddd':'#aaa' }}>{isFuture?'-':`${k.v}%`}</span>
-                  <div style={{ width:'100%',borderRadius:'6px 6px 0 0',background: isFuture?'#f0f0f0':'linear-gradient(180deg,#E53935,#F5A623)',height:`${barH}px`,transition:'height 0.3s' }}/>
-                  <span style={{ fontSize:11,fontWeight:isToday?800:400,color:isToday?'#E53935':'#888' }}>{k.d}</span>
-                </div>
-              )
-            })}
+          <div style={{ display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10 }}>
+            <p style={{ fontWeight:800,margin:0,fontSize:13 }}>Kehadiran {BNAME[chartBulan]} {chartTahun}</p>
+            <div style={{ display:'flex',gap:6 }}>
+              <select value={chartBulan} onChange={e=>setChartBulan(Number(e.target.value))} style={{ fontSize:11,border:'1px solid #e0e0e0',borderRadius:8,padding:'4px 6px',outline:'none' }}>
+                {BNAME.map((b,i)=><option key={i} value={i}>{b}</option>)}
+              </select>
+              <select value={chartTahun} onChange={e=>setChartTahun(Number(e.target.value))} style={{ fontSize:11,border:'1px solid #e0e0e0',borderRadius:8,padding:'4px 6px',outline:'none' }}>
+                {[2024,2025,2026].map(y=><option key={y}>{y}</option>)}
+              </select>
+            </div>
           </div>
-          <p style={{ fontSize:11,color:'#aaa',margin:'8px 0 0',textAlign:'center' }}>
-            Rata-rata: {hadirDays.length > 0 ? `${avgKehadiran}%` : '-'} minggu ini
+          {/* Scrollable chart — bar per tanggal */}
+          <div style={{ overflowX:'auto',paddingBottom:4 }}>
+            <div style={{ display:'flex',alignItems:'flex-end',gap:4,height:72,minWidth:`${daysInMonth*22}px` }}>
+              {kehadiranBulan.map(k=>{
+                const isToday = k.tglStr===today
+                const barH = k.isWeekend||k.isFuture ? 0 : Math.max(3, (k.v||0)*0.6)
+                const barBg = k.isWeekend ? '#f0f0f0' : k.isFuture ? '#f5f5f5' : isToday ? '#E53935' : 'linear-gradient(180deg,#E53935,#F5A623)'
+                return (
+                  <div key={k.d} style={{ display:'flex',flexDirection:'column',alignItems:'center',gap:2,flex:'0 0 18px' }}>
+                    <span style={{ fontSize:8,color:k.isWeekend||k.isFuture?'#ddd':isToday?'#E53935':'#aaa',fontWeight:isToday?800:400 }}>
+                      {k.isWeekend||k.isFuture?'':k.v+'%'}
+                    </span>
+                    <div style={{ width:10,borderRadius:'3px 3px 0 0',background:barBg,height:`${barH}px`,transition:'height 0.2s' }}/>
+                    <span style={{ fontSize:8,color:isToday?'#E53935':k.isWeekend?'#ddd':'#bbb',fontWeight:isToday?800:400 }}>{k.d}</span>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+          <p style={{ fontSize:11,color:'#aaa',margin:'6px 0 0',textAlign:'center' }}>
+            Rata-rata: <b style={{ color:'#E53935' }}>{workDays.length>0?`${avgKehadiran}%`:'-'}</b> · {workDays.length} hari kerja
           </p>
         </Card>
       </div>
@@ -1502,6 +1512,32 @@ const HRDKaryawan = ({ user, showToast, dbData, refreshData }) => {
   const [addForm, setAddForm] = useState({ NIP:'',Nama:'',Jabatan:'',Divisi:'',Email:'',NoHP:'' })
   const [confirmDel, setConfirmDel] = useState(false)
   const [loadingSave, setLoadingSave] = useState(false)
+  const [uploadingFoto, setUploadingFoto] = useState(false)
+  const fotoProfRef = useRef(null)
+
+  const uploadFotoProfil = async(file) => {
+    if(!selectedNIP||!file) return
+    if(file.size>3*1024*1024){ showToast('❌ Ukuran foto maksimal 3MB'); return }
+    setUploadingFoto(true)
+    try {
+      const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL
+      const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+      const ext = file.name.split('.').pop() || 'jpg'
+      const path = `profil/${selectedNIP}.${ext}`
+      const ab = await file.arrayBuffer()
+      const res = await fetch(`${SUPABASE_URL}/storage/v1/object/foto-profil/${path}`, {
+        method:'POST',
+        headers:{ 'Authorization':`Bearer ${SUPABASE_KEY}`,'apikey':SUPABASE_KEY,'Content-Type':file.type||'image/jpeg','x-upsert':'true' },
+        body: new Uint8Array(ab),
+      })
+      if(!res.ok){ showToast('❌ Gagal upload foto'); setUploadingFoto(false); return }
+      const fotoUrl = `${SUPABASE_URL}/storage/v1/object/public/foto-profil/${path}`
+      await supabase.from('master_karyawan').update({ foto_profil: fotoUrl }).eq('nip', selectedNIP)
+      showToast('✅ Foto profil diperbarui!')
+      refreshData()
+    } catch(e){ showToast('❌ Gagal upload: '+e.message) }
+    setUploadingFoto(false)
+  }
 
   const divisiList = ['Semua',...new Set(dbData.karyawan.map(k=>k.divisi).filter(Boolean))]
   const filtered = dbData.karyawan.filter(k=>(filterDiv==='Semua'||k.divisi===filterDiv)&&(!search||k.nama?.toLowerCase().includes(search.toLowerCase())||k.nip?.includes(search)))
@@ -1590,7 +1626,10 @@ const HRDKaryawan = ({ user, showToast, dbData, refreshData }) => {
         </div>
         {filtered.map(k=>(
           <Card key={k.nip} style={{ padding:16,display:'flex',alignItems:'center',gap:12,cursor:'pointer' }} onClick={()=>{ setSelectedNIP(k.nip); setDetailTab('Info'); setEditMode(false); setConfirmDel(false) }}>
-            <div style={{ width:48,height:48,borderRadius:'50%',background:'linear-gradient(135deg,#E53935,#F5A623)',display:'flex',alignItems:'center',justifyContent:'center',color:'white',fontWeight:700,fontSize:18,flexShrink:0 }}>{k.nama?.[0]}</div>
+            {k.foto_profil
+              ? <img src={k.foto_profil} alt={k.nama} style={{ width:48,height:48,borderRadius:'50%',objectFit:'cover',flexShrink:0,border:'2px solid #f0f0f0' }} onError={e=>{ e.target.style.display='none'; e.target.nextSibling.style.display='flex' }}/>
+              : null}
+            <div style={{ width:48,height:48,borderRadius:'50%',background:'linear-gradient(135deg,#E53935,#F5A623)',display:k.foto_profil?'none':'flex',alignItems:'center',justifyContent:'center',color:'white',fontWeight:700,fontSize:18,flexShrink:0 }}>{k.nama?.[0]}</div>
             <div style={{ flex:1 }}>
               <p style={{ fontWeight:800,fontSize:14,margin:0 }}>{k.nama}</p>
               <p style={{ fontSize:11,color:'#aaa',margin:0 }}>{k.nip} · {k.jabatan}</p>
@@ -1605,7 +1644,15 @@ const HRDKaryawan = ({ user, showToast, dbData, refreshData }) => {
       {emp && !confirmDel && (
         <Modal title="Detail Karyawan" onClose={()=>{ setSelectedNIP(null); setEditMode(false) }} wide>
           <div style={{ display:'flex',alignItems:'center',gap:16,marginBottom:16,padding:16,borderRadius:16,background:'linear-gradient(135deg,#FFF5F5,#FFF8E1)' }}>
-            <div style={{ width:60,height:60,borderRadius:'50%',background:'linear-gradient(135deg,#E53935,#F5A623)',display:'flex',alignItems:'center',justifyContent:'center',color:'white',fontWeight:800,fontSize:24,flexShrink:0 }}>{emp.nama?.[0]}</div>
+            {/* Foto Profil — klik untuk ganti */}
+            <div style={{ position:'relative',flexShrink:0 }}>
+              {emp.foto_profil
+                ? <img src={emp.foto_profil} alt={emp.nama} style={{ width:60,height:60,borderRadius:'50%',objectFit:'cover',border:'3px solid white',boxShadow:'0 2px 8px rgba(0,0,0,0.15)' }} onError={e=>e.target.style.display='none'}/>
+                : <div style={{ width:60,height:60,borderRadius:'50%',background:'linear-gradient(135deg,#E53935,#F5A623)',display:'flex',alignItems:'center',justifyContent:'center',color:'white',fontWeight:800,fontSize:24 }}>{emp.nama?.[0]}</div>}
+              <button onClick={()=>fotoProfRef.current?.click()} style={{ position:'absolute',bottom:0,right:0,width:20,height:20,borderRadius:'50%',background:'#E53935',border:'2px solid white',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',fontSize:10 }}>📷</button>
+              <input ref={fotoProfRef} type="file" accept="image/*" style={{ display:'none' }} onChange={e=>{ const f=e.target.files[0]; if(f) uploadFotoProfil(f) }}/>
+              {uploadingFoto && <div style={{ position:'absolute',inset:0,borderRadius:'50%',background:'rgba(0,0,0,0.4)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:10,color:'white' }}>⏳</div>}
+            </div>
             <div style={{ flex:1 }}>
               <p style={{ fontWeight:800,fontSize:16,margin:'0 0 2px' }}>{emp.nama}</p>
               <p style={{ fontSize:12,color:'#888',margin:'0 0 6px' }}>{emp.nip} · {emp.jabatan}</p>
@@ -1935,9 +1982,11 @@ const HRDAbsensi = ({ user, showToast, dbData, refreshData }) => {
                       {a.lokasi_masuk && <div style={{ display:'flex',alignItems:'flex-start',gap:4,marginTop:4 }}><span style={{ fontSize:10,flexShrink:0,marginTop:1 }}>📍</span><span style={{ fontSize:10,color:'#388E3C',lineHeight:1.3 }}>{a.lokasi_masuk}</span></div>}
                       {a.koordinat_masuk && <a href={`https://www.google.com/maps?q=${a.koordinat_masuk}`} target="_blank" rel="noreferrer" style={{ display:'inline-flex',alignItems:'center',gap:4,marginTop:6,fontSize:10,color:'#1565C0',fontWeight:600,textDecoration:'none',background:'#E3F2FD',padding:'3px 8px',borderRadius:6 }}>🗺️ Lihat Maps</a>}
                       {a.foto_masuk
-                        ? <button onClick={()=>setFotoModal({url:a.foto_masuk,label:'Foto Clock In',lokasi:a.lokasi_masuk,coords:a.koordinat_masuk})} style={{ marginTop:6,display:'flex',alignItems:'center',gap:6,background:'none',border:'1px solid #C8E6C9',borderRadius:8,padding:'4px 10px',cursor:'pointer',fontSize:11,color:'#2E7D32',fontWeight:600 }}>
-                            <img src={a.foto_masuk} alt="" style={{ width:28,height:28,borderRadius:6,objectFit:'cover' }}/>Lihat Foto</button>
-                        : <p style={{ fontSize:11,color:'#ccc',marginTop:6 }}>Tidak ada foto</p>}
+                        ? <img onClick={()=>setFotoModal({url:a.foto_masuk,label:'Foto Clock In',lokasi:a.lokasi_masuk,coords:a.koordinat_masuk})}
+                            src={a.foto_masuk} alt="masuk"
+                            style={{ width:'100%',borderRadius:10,maxHeight:90,objectFit:'cover',display:'block',marginTop:6,cursor:'pointer',border:'2px solid #C8E6C9' }}
+                            onError={e=>e.target.style.display='none'}/>
+                        : <p style={{ fontSize:10,color:'#ccc',marginTop:6,margin:0 }}>Tidak ada foto</p>}
                     </div>
                     <div style={{ background:'#FFF5F5',borderRadius:12,padding:12 }}>
                       <p style={{ fontSize:11,color:'#aaa',margin:'0 0 4px',fontWeight:600 }}>🔴 Clock Out</p>
@@ -1945,9 +1994,11 @@ const HRDAbsensi = ({ user, showToast, dbData, refreshData }) => {
                       {a.lokasi_keluar && <div style={{ display:'flex',alignItems:'flex-start',gap:4,marginTop:4 }}><span style={{ fontSize:10,flexShrink:0,marginTop:1 }}>📍</span><span style={{ fontSize:10,color:'#C62828',lineHeight:1.3 }}>{a.lokasi_keluar}</span></div>}
                       {a.koordinat_keluar && <a href={`https://www.google.com/maps?q=${a.koordinat_keluar}`} target="_blank" rel="noreferrer" style={{ display:'inline-flex',alignItems:'center',gap:4,marginTop:6,fontSize:10,color:'#1565C0',fontWeight:600,textDecoration:'none',background:'#E3F2FD',padding:'3px 8px',borderRadius:6 }}>🗺️ Lihat Maps</a>}
                       {a.foto_keluar
-                        ? <button onClick={()=>setFotoModal({url:a.foto_keluar,label:'Foto Clock Out',lokasi:a.lokasi_keluar,coords:a.koordinat_keluar})} style={{ marginTop:6,display:'flex',alignItems:'center',gap:6,background:'none',border:'1px solid #FFCDD2',borderRadius:8,padding:'4px 10px',cursor:'pointer',fontSize:11,color:'#C62828',fontWeight:600 }}>
-                            <img src={a.foto_keluar} alt="" style={{ width:28,height:28,borderRadius:6,objectFit:'cover' }}/>Lihat Foto</button>
-                        : <p style={{ fontSize:11,color:'#ccc',marginTop:6 }}>Tidak ada foto</p>}
+                        ? <img onClick={()=>setFotoModal({url:a.foto_keluar,label:'Foto Clock Out',lokasi:a.lokasi_keluar,coords:a.koordinat_keluar})}
+                            src={a.foto_keluar} alt="keluar"
+                            style={{ width:'100%',borderRadius:10,maxHeight:90,objectFit:'cover',display:'block',marginTop:6,cursor:'pointer',border:'2px solid #FFCDD2' }}
+                            onError={e=>e.target.style.display='none'}/>
+                        : <p style={{ fontSize:10,color:'#ccc',marginTop:6,margin:0 }}>{a.jam_keluar?'Tidak ada foto':'Belum clock out'}</p>}
                     </div>
                   </div>
                   {a.menit_terlambat>0 && (
