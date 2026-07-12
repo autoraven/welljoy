@@ -121,6 +121,16 @@ const Card = ({ children, style={}, onClick }) => (
   <div onClick={onClick} style={{ background:'white',borderRadius:16,boxShadow:'0 4px 16px rgba(0,0,0,0.06)',cursor:onClick?'pointer':'default',...style }}>{children}</div>
 )
 
+// ─── AVATAR — foto profil kalau ada, fallback gradient inisial ───────────────
+const Avatar = ({ fotoProfil, nama, size=40, fontSize=16, border='none' }) => {
+  const [err, setErr] = React.useState(false)
+  return (fotoProfil && !err)
+    ? <img src={fotoProfil} alt={nama||''}
+        style={{ width:size,height:size,borderRadius:'50%',objectFit:'cover',flexShrink:0,border }}
+        onError={()=>setErr(true)}/>
+    : <div style={{ width:size,height:size,borderRadius:'50%',background:'linear-gradient(135deg,#E53935,#F5A623)',display:'flex',alignItems:'center',justifyContent:'center',color:'white',fontWeight:700,fontSize,flexShrink:0,border }}>{(nama||'?')[0]}</div>
+}
+
 // ─── CHANGE PASSWORD MODAL ──────────────────────────────────────────────────
 const inputStyle = { width:'100%',border:'1px solid #e0e0e0',borderRadius:12,padding:'10px 12px',fontSize:13,outline:'none',boxSizing:'border-box' }
 
@@ -774,7 +784,7 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
     <div style={{ flex:1,overflowY:'auto',paddingBottom:80,background:'#F8F8F8' }}>
       <div style={{ display:'flex',alignItems:'center',justifyContent:'space-between',padding:'24px 16px 12px' }}>
         <div style={{ display:'flex',alignItems:'center',gap:12 }}>
-          <div style={{ width:48,height:48,borderRadius:'50%',background:'linear-gradient(135deg,#E53935,#F5A623)',display:'flex',alignItems:'center',justifyContent:'center',color:'white',fontWeight:700,fontSize:18 }}>{user.nama?.[0]}</div>
+          <Avatar fotoProfil={emp.foto_profil} nama={user.nama} size={48} fontSize={18}/>
           <div><p style={{ fontSize:11,color:'#aaa',margin:0 }}>Halo, 👋</p><p style={{ fontWeight:800,color:'#111',margin:0 }}>{user.nama}</p><p style={{ fontSize:11,color:'#aaa',margin:0 }}>{emp.jabatan}</p></div>
         </div>
         <NotifBell nip={user.nip} onOpen={()=>setShowNotif(true)} notifications={dbData.notifications}/>
@@ -1435,7 +1445,7 @@ const HRDDashboard = ({ user, showToast, onNavChange, dbData, refreshData }) => 
                 <p style={{ fontSize:12,color:'#aaa',margin:'0 0 4px' }}>{hadirList.length} karyawan hadir:</p>
                 {hadirList.map((a,i)=>{ const k=dbData.karyawan.find(x=>x.nip===a.nip); return (
                   <div key={i} style={{ display:'flex',alignItems:'center',gap:12,padding:'10px 14px',background:'#F0FFF4',borderRadius:12,border:'1px solid #C8E6C9' }}>
-                    <div style={{ width:36,height:36,borderRadius:'50%',background:'linear-gradient(135deg,#43A047,#1B5E20)',display:'flex',alignItems:'center',justifyContent:'center',color:'white',fontWeight:700,fontSize:15,flexShrink:0 }}>{a.nama?.[0]}</div>
+                    <Avatar fotoProfil={k?.foto_profil} nama={a.nama} size={36} fontSize={15}/>
                     <div style={{ flex:1 }}>
                       <p style={{ fontWeight:700,fontSize:13,margin:0,color:'#2E7D32' }}>{a.nama}</p>
                       <p style={{ fontSize:11,color:'#aaa',margin:0 }}>{a.nip} · {k?.jabatan||'-'}</p>
@@ -1459,7 +1469,7 @@ const HRDDashboard = ({ user, showToast, onNavChange, dbData, refreshData }) => 
                 <p style={{ fontSize:12,color:'#aaa',margin:'0 0 4px' }}>{terlambatList.length} karyawan terlambat:</p>
                 {terlambatList.map((a,i)=>{ const k=dbData.karyawan.find(x=>x.nip===a.nip); return (
                   <div key={i} style={{ display:'flex',alignItems:'center',gap:12,padding:'10px 14px',background:'#FFF8E1',borderRadius:12,border:'1px solid #FFE082' }}>
-                    <div style={{ width:36,height:36,borderRadius:'50%',background:'linear-gradient(135deg,#F57F17,#E65100)',display:'flex',alignItems:'center',justifyContent:'center',color:'white',fontWeight:700,fontSize:15,flexShrink:0 }}>{a.nama?.[0]}</div>
+                    <Avatar fotoProfil={k?.foto_profil} nama={a.nama} size={36} fontSize={15}/>
                     <div style={{ flex:1 }}>
                       <p style={{ fontWeight:700,fontSize:13,margin:0,color:'#E65100' }}>{a.nama}</p>
                       <p style={{ fontSize:11,color:'#aaa',margin:0 }}>{a.nip} · {k?.jabatan||'-'}</p>
@@ -1483,7 +1493,7 @@ const HRDDashboard = ({ user, showToast, onNavChange, dbData, refreshData }) => 
                 <p style={{ fontSize:12,color:'#aaa',margin:'0 0 4px' }}>{belumAbsenList.length} karyawan belum absen:</p>
                 {belumAbsenList.map((k,i)=>(
                   <div key={i} style={{ display:'flex',alignItems:'center',gap:12,padding:'10px 14px',background:'#FFF5F5',borderRadius:12,border:'1px solid #FFCDD2' }}>
-                    <div style={{ width:36,height:36,borderRadius:'50%',background:'linear-gradient(135deg,#E53935,#F5A623)',display:'flex',alignItems:'center',justifyContent:'center',color:'white',fontWeight:700,fontSize:15,flexShrink:0 }}>{k.nama?.[0]}</div>
+                    <Avatar fotoProfil={k?.foto_profil} nama={k.nama} size={36} fontSize={15}/>
                     <div style={{ flex:1 }}>
                       <p style={{ fontWeight:700,fontSize:13,margin:0,color:'#C62828' }}>{k.nama}</p>
                       <p style={{ fontSize:11,color:'#aaa',margin:0 }}>{k.nip} · {k.jabatan||'-'}</p>
@@ -1996,7 +2006,7 @@ const HRDAbsensi = ({ user, showToast, dbData, refreshData }) => {
               return (
                 <Card key={i} style={{ padding:16 }}>
                   <div style={{ display:'flex',alignItems:'center',gap:12,marginBottom:12 }}>
-                    <div style={{ width:44,height:44,borderRadius:'50%',background:'linear-gradient(135deg,#E53935,#F5A623)',display:'flex',alignItems:'center',justifyContent:'center',color:'white',fontWeight:700,fontSize:18,flexShrink:0 }}>{a.nama?.[0]}</div>
+                    <Avatar fotoProfil={dbData.karyawan.find(x=>x.nip===a.nip)?.foto_profil} nama={a.nama} size={44} fontSize={18}/>
                     <div style={{ flex:1 }}><p style={{ fontWeight:700,fontSize:14,margin:0 }}>{a.nama}</p><p style={{ fontSize:11,color:'#aaa',margin:0 }}>{empData?.jabatan||''}</p></div>
                     <Chip status={a.status_kehadiran}/>
                   </div>
@@ -2049,7 +2059,7 @@ const HRDAbsensi = ({ user, showToast, dbData, refreshData }) => {
                 <p style={{ fontSize:12,color:'#aaa',margin:'0 0 4px' }}>{hadirList.length} karyawan hadir:</p>
                 {hadirList.map((a,i)=>{ const k=dbData.karyawan.find(x=>x.nip===a.nip); return (
                   <div key={i} style={{ display:'flex',alignItems:'center',gap:12,padding:'10px 14px',background:'#F0FFF4',borderRadius:12,border:'1px solid #C8E6C9' }}>
-                    <div style={{ width:36,height:36,borderRadius:'50%',background:'linear-gradient(135deg,#43A047,#1B5E20)',display:'flex',alignItems:'center',justifyContent:'center',color:'white',fontWeight:700,fontSize:15,flexShrink:0 }}>{a.nama?.[0]}</div>
+                    <Avatar fotoProfil={dbData.karyawan.find(x=>x.nip===a.nip)?.foto_profil} nama={a.nama} size={36} fontSize={15}/>
                     <div style={{ flex:1 }}>
                       <p style={{ fontWeight:700,fontSize:13,margin:0,color:'#2E7D32' }}>{a.nama}</p>
                       <p style={{ fontSize:11,color:'#aaa',margin:0 }}>{a.nip} · {k?.jabatan||'-'}</p>
@@ -2073,7 +2083,7 @@ const HRDAbsensi = ({ user, showToast, dbData, refreshData }) => {
                 <p style={{ fontSize:12,color:'#aaa',margin:'0 0 4px' }}>{terlambatList.length} karyawan terlambat:</p>
                 {terlambatList.map((a,i)=>{ const k=dbData.karyawan.find(x=>x.nip===a.nip); return (
                   <div key={i} style={{ display:'flex',alignItems:'center',gap:12,padding:'10px 14px',background:'#FFF8E1',borderRadius:12,border:'1px solid #FFE082' }}>
-                    <div style={{ width:36,height:36,borderRadius:'50%',background:'linear-gradient(135deg,#F57F17,#E65100)',display:'flex',alignItems:'center',justifyContent:'center',color:'white',fontWeight:700,fontSize:15,flexShrink:0 }}>{a.nama?.[0]}</div>
+                    <Avatar fotoProfil={dbData.karyawan.find(x=>x.nip===a.nip)?.foto_profil} nama={a.nama} size={36} fontSize={15}/>
                     <div style={{ flex:1 }}>
                       <p style={{ fontWeight:700,fontSize:13,margin:0,color:'#E65100' }}>{a.nama}</p>
                       <p style={{ fontSize:11,color:'#aaa',margin:0 }}>{a.nip} · {k?.jabatan||'-'}</p>
@@ -2098,7 +2108,7 @@ const HRDAbsensi = ({ user, showToast, dbData, refreshData }) => {
                 <p style={{ fontSize:12,color:'#aaa',margin:'0 0 4px' }}>{belumAbsenList.length} karyawan belum absen:</p>
                 {belumAbsenList.map((k,i)=>(
                   <div key={i} style={{ display:'flex',alignItems:'center',gap:12,padding:'10px 14px',background:'#FFF5F5',borderRadius:12,border:'1px solid #FFCDD2' }}>
-                    <div style={{ width:36,height:36,borderRadius:'50%',background:'linear-gradient(135deg,#E53935,#F5A623)',display:'flex',alignItems:'center',justifyContent:'center',color:'white',fontWeight:700,fontSize:15,flexShrink:0 }}>{k.nama?.[0]}</div>
+                    <Avatar fotoProfil={k?.foto_profil} nama={k.nama} size={36} fontSize={15}/>
                     <div style={{ flex:1 }}>
                       <p style={{ fontWeight:700,fontSize:13,margin:0,color:'#C62828' }}>{k.nama}</p>
                       <p style={{ fontSize:11,color:'#aaa',margin:0 }}>{k.nip} · {k.jabatan||'-'}</p>
@@ -2208,7 +2218,7 @@ const HRDApproval = ({ user, showToast, dbData, refreshData }) => {
             <div style={{ display:'flex',alignItems:'center',gap:12 }}>
               {c.selfie_url
                 ? <img src={c.selfie_url} alt="" style={{ width:48,height:48,borderRadius:'50%',objectFit:'cover',flexShrink:0,border:'2px solid #F5A623' }}/>
-                : <div style={{ width:48,height:48,borderRadius:'50%',background:'linear-gradient(135deg,#E53935,#F5A623)',display:'flex',alignItems:'center',justifyContent:'center',color:'white',fontWeight:700,fontSize:18,flexShrink:0 }}>{c.nama?.[0]}</div>}
+                : <Avatar fotoProfil={dbData.karyawan.find(x=>x.nip===c.nip)?.foto_profil} nama={c.nama} size={48} fontSize={18}/>}
               <div style={{ flex:1 }}>
                 <p style={{ fontWeight:700,fontSize:14,margin:0 }}>{c.nama}</p>
                 <p style={{ fontSize:12,color:'#888',margin:0 }}>{c.jabatan} · {c.jenis_izin}</p>
@@ -2330,7 +2340,7 @@ const HRDMore = ({ user, showToast, onLogout, dbData, refreshData }) => {
       <div style={{ padding:'24px 16px 12px' }}><h1 style={{ fontWeight:800,fontSize:18,margin:0 }}>Lainnya</h1></div>
       <div style={{ padding:'0 16px',display:'flex',flexDirection:'column',gap:10 }}>
         <Card style={{ padding:16,display:'flex',alignItems:'center',gap:14 }}>
-          <div style={{ width:52,height:52,borderRadius:'50%',background:'linear-gradient(135deg,#E53935,#F5A623)',display:'flex',alignItems:'center',justifyContent:'center',color:'white',fontWeight:700,fontSize:22 }}>{user.nama?.[0]}</div>
+          <Avatar fotoProfil={dbData.karyawan.find(x=>x.nip===user.nip)?.foto_profil} nama={user.nama} size={52} fontSize={22}/>
           <div><p style={{ fontWeight:800,margin:0 }}>{user.nama}</p><p style={{ fontSize:12,color:'#aaa',margin:0 }}>{user.nip}</p><span style={{ fontSize:11,padding:'2px 10px',borderRadius:99,color:'white',background:'linear-gradient(135deg,#E53935,#F5A623)',fontWeight:700 }}>HRD</span></div>
         </Card>
         {[
