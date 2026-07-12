@@ -1520,22 +1520,28 @@ const HRDKaryawan = ({ user, showToast, dbData, refreshData }) => {
     if(file.size>3*1024*1024){ showToast('❌ Ukuran foto maksimal 3MB'); return }
     setUploadingFoto(true)
     try {
-      const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL
-      const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-      const ext = file.name.split('.').pop() || 'jpg'
+      const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg'
       const path = `profil/${selectedNIP}.${ext}`
-      const ab = await file.arrayBuffer()
-      const res = await fetch(`${SUPABASE_URL}/storage/v1/object/foto-profil/${path}`, {
-        method:'POST',
-        headers:{ 'Authorization':`Bearer ${SUPABASE_KEY}`,'apikey':SUPABASE_KEY,'Content-Type':file.type||'image/jpeg','x-upsert':'true' },
-        body: new Uint8Array(ab),
-      })
-      if(!res.ok){ showToast('❌ Gagal upload foto'); setUploadingFoto(false); return }
-      const fotoUrl = `${SUPABASE_URL}/storage/v1/object/public/foto-profil/${path}`
-      await supabase.from('master_karyawan').update({ foto_profil: fotoUrl }).eq('nip', selectedNIP)
+
+      // Upload via Supabase client supaya RLS/auth berjalan benar
+      const { error: upErr } = await supabase.storage
+        .from('foto-profil')
+        .upload(path, file, { upsert: true, contentType: file.type || 'image/jpeg' })
+
+      if(upErr){ console.error('[foto-profil] upload error:', upErr); showToast('❌ Gagal upload: '+upErr.message); setUploadingFoto(false); return }
+
+      // Ambil public URL
+      const { data: { publicUrl } } = supabase.storage.from('foto-profil').getPublicUrl(path)
+
+      // Tambah cache-bust supaya browser tidak pakai foto lama
+      const fotoUrl = `${publicUrl}?t=${Date.now()}`
+
+      const { error: dbErr } = await supabase.from('master_karyawan').update({ foto_profil: fotoUrl }).eq('nip', selectedNIP)
+      if(dbErr){ showToast('❌ Gagal simpan URL foto'); setUploadingFoto(false); return }
+
       showToast('✅ Foto profil diperbarui!')
       refreshData()
-    } catch(e){ showToast('❌ Gagal upload: '+e.message) }
+    } catch(e){ console.error('[foto-profil] exception:', e); showToast('❌ Error: '+e.message) }
     setUploadingFoto(false)
   }
 
