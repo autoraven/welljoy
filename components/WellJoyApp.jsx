@@ -1555,7 +1555,8 @@ const HRDKaryawan = ({ user, showToast, dbData, refreshData }) => {
         setUploadingFoto(false); return
       }
 
-      const fotoUrl = `${SUPABASE_URL}/storage/v1/object/public/foto-profil/${path}?t=${Date.now()}`
+      // Simpan URL bersih tanpa timestamp ke DB
+      const fotoUrl = `${SUPABASE_URL}/storage/v1/object/public/foto-profil/${path}`
       await supabase.from('master_karyawan').update({ foto_profil: fotoUrl }).eq('nip', selectedNIP)
       showToast('✅ Foto profil diperbarui!')
       refreshData()
@@ -1671,7 +1672,7 @@ const HRDKaryawan = ({ user, showToast, dbData, refreshData }) => {
             {/* Foto Profil — klik untuk ganti */}
             <div style={{ position:'relative',flexShrink:0 }}>
               {emp.foto_profil
-                ? <img src={emp.foto_profil} alt={emp.nama} style={{ width:60,height:60,borderRadius:'50%',objectFit:'cover',border:'3px solid white',boxShadow:'0 2px 8px rgba(0,0,0,0.15)' }} onError={e=>e.target.style.display='none'}/>
+                ? <img src={`${emp.foto_profil}?t=${Date.now()}`} alt={emp.nama} style={{ width:60,height:60,borderRadius:'50%',objectFit:'cover',border:'3px solid white',boxShadow:'0 2px 8px rgba(0,0,0,0.15)' }} onError={e=>e.target.style.display='none'}/>
                 : <div style={{ width:60,height:60,borderRadius:'50%',background:'linear-gradient(135deg,#E53935,#F5A623)',display:'flex',alignItems:'center',justifyContent:'center',color:'white',fontWeight:800,fontSize:24 }}>{emp.nama?.[0]}</div>}
               <button onClick={()=>fotoProfRef.current?.click()} style={{ position:'absolute',bottom:0,right:0,width:20,height:20,borderRadius:'50%',background:'#E53935',border:'2px solid white',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',fontSize:10 }}>📷</button>
               <input ref={fotoProfRef} type="file" accept="image/*" style={{ display:'none' }} onChange={e=>{ const f=e.target.files[0]; if(f) uploadFotoProfil(f) }}/>
