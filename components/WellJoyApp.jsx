@@ -123,7 +123,7 @@ const Card = ({ children, style={}, onClick }) => (
 
 // ─── AVATAR — foto profil kalau ada, fallback gradient inisial ───────────────
 const Avatar = ({ fotoProfil, nama, size=40, fontSize=16, border='none' }) => {
-  const [err, setErr] = React.useState(false)
+  const [err, setErr] = useState(false)
   return (fotoProfil && !err)
     ? <img src={fotoProfil} alt={nama||''}
         style={{ width:size,height:size,borderRadius:'50%',objectFit:'cover',flexShrink:0,border }}
