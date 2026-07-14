@@ -1341,7 +1341,7 @@ const HRDDashboard = ({ user, showToast, onNavChange, dbData, refreshData }) => 
     const tglStr = `${chartTahun}-${String(chartBulan+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`
     const isFuture = tglStr > today
     const dayW = new Date(tglStr).getDay()
-    const isWeekend = dayW===0||dayW===6
+    const isWeekend = dayW===0 // hanya Minggu yang dikecualikan, Sabtu tetap masuk
     if(isFuture||isWeekend) return { d, tglStr, v:null, isFuture, isWeekend }
     const hadirHari = dbData.attendance.filter(a=>a.tanggal===tglStr&&['HADIR','WFH','TERLAMBAT'].includes(a.status_kehadiran)).length
     const persen = totalKaryawan>0 ? Math.round(hadirHari/totalKaryawan*100) : 0
