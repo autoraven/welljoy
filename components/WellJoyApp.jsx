@@ -796,7 +796,7 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
       <div style={{ padding:'0 16px',display:'flex',flexDirection:'column',gap:12 }}>
         <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:12 }}>
           <Card style={{ padding:16 }}><p style={{ fontSize:11,color:'#aaa',margin:'0 0 4px' }}>Waktu Saat Ini</p><p style={{ fontWeight:800,fontSize:22,color:'#E53935',margin:0 }}>{jam}</p><p style={{ fontSize:11,color:'#aaa',marginTop:4 }}>{now.getDate()} {BNAME[now.getMonth()]}</p></Card>
-          <Card style={{ padding:16 }}><p style={{ fontSize:11,color:'#aaa',margin:'0 0 4px' }}>Sisa Izin</p><p style={{ fontWeight:800,fontSize:22,color:'#F5A623',margin:0 }}>{emp.sisa_izin??0} Hari</p><p style={{ fontSize:11,color:'#aaa',marginTop:4 }}>Tahun {now.getFullYear()}</p></Card>
+          <Card style={{ padding:16 }}><p style={{ fontSize:11,color:'#aaa',margin:'0 0 4px' }}>Sisa Izin Lainnya</p><p style={{ fontWeight:800,fontSize:22,color:'#F5A623',margin:0 }}>{emp.sisa_izin??0}</p><p style={{ fontSize:11,color:'#aaa',marginTop:4 }}>dari {emp.sisa_izin??0} kuota</p></Card>
         </div>
         <Card style={{ padding:16 }}>
           <div style={{ display:'flex',alignItems:'center',gap:8,marginBottom:12 }}><span style={{ fontSize:20 }}>🖐️</span><div><p style={{ fontWeight:700,margin:0 }}>Absen & Selfie</p><p style={{ fontSize:11,color:'#aaa',margin:0 }}>Rekam kehadiranmu</p></div></div>
@@ -973,6 +973,7 @@ const EmpAjukanIzin = ({ user, showToast, onBack, refreshData, dbData }) => {
 
   // Izin terlambat/setengah hari/lembur = selalu 1 hari (tanggal mulai = selesai)
   const IS_ONE_DAY = ['Izin Terlambat','Izin Setengah Hari','Izin Lembur'].includes(form.jenis)
+  const emp = dbData.karyawan.find(k=>k.nip===user.nip)||user
   const hari = () => {
     if (IS_ONE_DAY) return 1
     if(!form.mulai||!form.selesai) return 0
@@ -1099,9 +1100,21 @@ const EmpAjukanIzin = ({ user, showToast, onBack, refreshData, dbData }) => {
               ))}
             </div>
             {/* Izin Lainnya sebagai opsi terakhir */}
-            <button onClick={()=>setForm(f=>({...f,jenis:'Izin Lainnya'}))} style={{ width:'100%',padding:'11px 14px',borderRadius:12,border:`2px solid ${form.jenis==='Izin Lainnya'?'#555':'#e0e0e0'}`,background:form.jenis==='Izin Lainnya'?'#f5f5f5':'white',cursor:'pointer',fontWeight:700,fontSize:12,color:form.jenis==='Izin Lainnya'?'#333':'#888',textAlign:'left',display:'flex',alignItems:'center',gap:8 }}>
-              <span style={{ fontSize:18 }}>📋</span> Izin Lainnya
-            </button>
+            {(() => {
+              const sisaLainnya = emp?.sisa_izin ?? 0
+              const habis = sisaLainnya <= 0
+              return (
+                <button
+                  onClick={()=>!habis&&setForm(f=>({...f,jenis:'Izin Lainnya'}))}
+                  style={{ width:'100%',padding:'11px 14px',borderRadius:12,border:`2px solid ${form.jenis==='Izin Lainnya'?'#555':habis?'#ffcdd2':'#e0e0e0'}`,background:habis?'#fff5f5':form.jenis==='Izin Lainnya'?'#f5f5f5':'white',cursor:habis?'not-allowed':'pointer',fontWeight:700,fontSize:12,color:habis?'#e57373':form.jenis==='Izin Lainnya'?'#333':'#888',textAlign:'left',display:'flex',alignItems:'center',gap:8,opacity:habis?0.7:1 }}>
+                  <span style={{ fontSize:18 }}>📋</span>
+                  <span style={{ flex:1 }}>Izin Lainnya</span>
+                  <span style={{ fontSize:11,background:habis?'#FFCDD2':'#E8F5E9',color:habis?'#C62828':'#2E7D32',borderRadius:99,padding:'2px 8px',fontWeight:800 }}>
+                    {habis ? 'Habis' : `${sisaLainnya} tersisa`}
+                  </span>
+                </button>
+              )
+            })()}
           </div>
 
           {/* Hint konteks jenis izin yang dipilih */}
@@ -1621,7 +1634,7 @@ const HRDKaryawan = ({ user, showToast, dbData, refreshData }) => {
     if (addRole === 'EMPLOYEE') {
       await supabase.from('master_karyawan').insert({
         nip:addForm.NIP,nama:addForm.Nama,jabatan:addForm.Jabatan,divisi:addForm.Divisi,email:addForm.Email,no_hp:addForm.NoHP,status:'aktif',
-        sisa_izin:12,gaji_pokok:5000000,tunjangan_jabatan:1000000,tunjangan_transport:500000,tunjangan_makan:750000,
+        sisa_izin:2, gaji_pokok:5000000,tunjangan_jabatan:1000000,tunjangan_transport:500000,tunjangan_makan:750000,
         bpjs_kesehatan:150000,bpjs_ketenagakerjaan:200000,pph21:1050000,tanggal_masuk:new Date().toISOString().split('T')[0],
         atasan:user.nama,lembur_per_jam:45000,potongan_terlambat_per_menit:5000,
         jam_masuk_wajib:'08:00',jam_keluar_wajib:'16:40',
@@ -1713,7 +1726,7 @@ const HRDKaryawan = ({ user, showToast, dbData, refreshData }) => {
           {detailTab==='Info' && (
             <div>
               {editMode && <div style={{ background:'#FFF8E1',padding:'10px 14px',borderRadius:10,fontSize:12,color:'#F57F17',fontWeight:600,marginBottom:12 }}>Mode Edit aktif</div>}
-              {[['NIP','nip'],['Nama','nama'],['NIK','nik'],['Email','email'],['No. HP','no_hp'],['Alamat','alamat'],['Divisi','divisi'],['Jabatan','jabatan'],['Tanggal Masuk','tanggal_masuk'],['Atasan','atasan'],['Sisa Izin (hari)','sisa_izin'],['Status','status']].map(([lbl,k])=>(
+              {[['NIP','nip'],['Nama','nama'],['NIK','nik'],['Email','email'],['No. HP','no_hp'],['Alamat','alamat'],['Divisi','divisi'],['Jabatan','jabatan'],['Tanggal Masuk','tanggal_masuk'],['Atasan','atasan'],['Sisa Izin Lainnya','sisa_izin'],['Status','status']].map(([lbl,k])=>(
                 <div key={k} style={{ display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 0',borderBottom:'1px solid #f5f5f5',fontSize:13 }}>
                   <span style={{ color:'#aaa',flexShrink:0,width:130 }}>{lbl}</span>
                   {editMode&&k!=='nip'?efv(k):<span style={{ fontWeight:600,color:'#333',textAlign:'right',flex:1,marginLeft:8 }}>{emp[k]||'-'}</span>}
@@ -2167,8 +2180,9 @@ const HRDApproval = ({ user, showToast, dbData, refreshData }) => {
     if(!error){
       if(action==='approve'){
         const emp = dbData.karyawan.find(k=>k.nip===selectedItem.nip)
-        // Jenis Izin Terlambat/Setengah/Lembur tidak kurangi sisa_izin (bukan izin hari penuh)
-        const IS_HARI_PENUH = ['Izin Sakit','Izin Lainnya'].includes(selectedItem.jenis_izin)
+        // Jenis Izin Terlambat/Setengah/Lembur tidak kurangi sisa_izin
+        // Hanya Izin Lainnya yang kurangi sisa_izin
+        const IS_HARI_PENUH = selectedItem.jenis_izin === 'Izin Lainnya'
         if(emp && IS_HARI_PENUH) await supabase.from('master_karyawan').update({ sisa_izin:Math.max(0,(emp.sisa_izin??0)-selectedItem.jumlah_hari) }).eq('nip',selectedItem.nip)
 
         // Izin Terlambat disetujui → reset keterlambatan di rekap absensi hari itu
