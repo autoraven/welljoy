@@ -2370,7 +2370,7 @@ const HRDMore = ({ user, showToast, onLogout, dbData, refreshData }) => {
         ))}
         <button onClick={()=>setShowChangePw(true)} style={{ padding:14,borderRadius:14,color:'#444',fontWeight:700,fontSize:14,border:'1px solid #e0e0e0',background:'white',cursor:'pointer',marginTop:4,width:'100%' }}>🔑 Ubah Password</button>
         <button onClick={onLogout} style={{ padding:14,borderRadius:14,color:'#E53935',fontWeight:700,fontSize:14,border:'2px solid #FFCDD2',background:'white',cursor:'pointer',marginTop:4,width:'100%' }}>← Keluar</button>
-        <p style={{ textAlign:'center',fontSize:10,color:'#ddd',marginTop:8 }}>#gg</p>
+        <p style={{ textAlign:'center',fontSize:10,color:'#ddd',marginTop:8 }}>#gg & Rifqi</p>
       </div>
 
       {showChangePw && <ChangePasswordModal user={user} showToast={showToast} onClose={()=>setShowChangePw(false)}/>}
@@ -2527,7 +2527,7 @@ const LoginPage = ({ onLogin }) => {
         </div>
         <BtnGrad onClick={login} disabled={loading}>{loading?'Memverifikasi...':'Masuk Sekarang'}</BtnGrad>
         <p style={{ textAlign:'center',fontSize:11,color:'#ccc',marginTop:16 }}>Lupa password? Hubungi HRD</p>
-        <p style={{ textAlign:'center',fontSize:10,color:'#ddd',marginTop:20 }}>#gg</p>
+        <p style={{ textAlign:'center',fontSize:10,color:'#ddd',marginTop:20 }}>#gg & Rifqi</p>
       </div>
     </div>
   )
