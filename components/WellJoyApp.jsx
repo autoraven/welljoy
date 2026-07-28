@@ -1522,6 +1522,52 @@ const HRDDashboard = ({ user, showToast, onNavChange, dbData, refreshData }) => 
   )
 }
 
+// ─── PASSWORD TAB HRD ────────────────────────────────────────────────────────
+const PasswordTabHRD = ({ emp, showToast, dbData }) => {
+  const [newPw, setNewPw] = useState('')
+  const [confirmPw, setConfirmPw] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  const userRecord = dbData?.users?.find(u=>u.nip===emp.nip)
+  const currentPassword = userRecord?.password || '-'
+
+  const save = async () => {
+    if (!newPw) { showToast('⚠️ Password baru wajib diisi'); return }
+    if (newPw.length < 6) { showToast('⚠️ Password minimal 6 karakter'); return }
+    if (newPw !== confirmPw) { showToast('⚠️ Konfirmasi password tidak cocok'); return }
+    setLoading(true)
+    const { error } = await supabase.from('users').update({ password: newPw }).eq('nip', emp.nip)
+    if (!error) {
+      showToast(`✅ Password ${emp.nama} berhasil diubah`)
+      setNewPw(''); setConfirmPw('')
+    } else { showToast('❌ Gagal mengubah password') }
+    setLoading(false)
+  }
+
+  return (
+    <div style={{ display:'flex',flexDirection:'column',gap:12,padding:'4px 0' }}>
+      <div style={{ background:'#F9F9F9',borderRadius:14,padding:16 }}>
+        <p style={{ fontSize:12,fontWeight:700,color:'#aaa',margin:'0 0 6px' }}>Password Saat Ini</p>
+        <p style={{ fontWeight:700,fontSize:16,margin:0,color:'#333',wordBreak:'break-all' }}>{currentPassword}</p>
+      </div>
+      <div style={{ background:'white',border:'1px solid #e0e0e0',borderRadius:14,padding:16,display:'flex',flexDirection:'column',gap:10 }}>
+        <p style={{ fontSize:12,fontWeight:700,color:'#555',margin:0 }}>🔑 Ubah Password</p>
+        <div>
+          <label style={{ fontSize:11,fontWeight:700,color:'#888',display:'block',marginBottom:4 }}>Password Baru</label>
+          <input type="text" value={newPw} onChange={e=>setNewPw(e.target.value)} placeholder="Minimal 6 karakter"
+            style={{ width:'100%',border:'1px solid #e0e0e0',borderRadius:10,padding:'10px 12px',fontSize:13,outline:'none',boxSizing:'border-box' }}/>
+        </div>
+        <div>
+          <label style={{ fontSize:11,fontWeight:700,color:'#888',display:'block',marginBottom:4 }}>Konfirmasi Password Baru</label>
+          <input type="text" value={confirmPw} onChange={e=>setConfirmPw(e.target.value)} placeholder="Ulangi password baru"
+            style={{ width:'100%',border:'1px solid #e0e0e0',borderRadius:10,padding:'10px 12px',fontSize:13,outline:'none',boxSizing:'border-box' }}/>
+        </div>
+        <BtnGrad onClick={save} disabled={loading}>{loading?'Menyimpan...':'Simpan Password Baru'}</BtnGrad>
+      </div>
+    </div>
+  )
+}
+
 const HRDKaryawan = ({ user, showToast, dbData, refreshData }) => {
   const [search, setSearch] = useState('')
   const [filterDiv, setFilterDiv] = useState('Semua')
@@ -1606,12 +1652,9 @@ const HRDKaryawan = ({ user, showToast, dbData, refreshData }) => {
       nama:editForm.nama, email:editForm.email, no_hp:editForm.no_hp,
       jabatan:editForm.jabatan, divisi:editForm.divisi, status:editForm.status,
       sisa_izin:Number(editForm.sisa_izin)||0, nik:editForm.nik, alamat:editForm.alamat, atasan:editForm.atasan,
-      jam_masuk_wajib: jadwalUpdate.jam_masuk_senin,    // backward-compat default
+      jam_masuk_wajib: jadwalUpdate.jam_masuk_senin,
       jam_keluar_wajib: jadwalUpdate.jam_keluar_senin,
       ...jadwalUpdate,
-      gaji_pokok:Number(editForm.gaji_pokok)||0, tunjangan_jabatan:Number(editForm.tunjangan_jabatan)||0,
-      tunjangan_transport:Number(editForm.tunjangan_transport)||0, tunjangan_makan:Number(editForm.tunjangan_makan)||0,
-      bpjs_kesehatan:Number(editForm.bpjs_kesehatan)||0, bpjs_ketenagakerjaan:Number(editForm.bpjs_ketenagakerjaan)||0, pph21:Number(editForm.pph21)||0,
     }).eq('nip',selectedNIP)
     if(!error){ await supabase.from('audit_log').insert({ user_name:user.nama,nip:user.nip,aktivitas:`Edit data ${emp?.nama}`,keterangan:'' }); showToast('✅ Data disimpan!'); setEditMode(false); refreshData() }
     else { console.error(error); showToast('❌ Gagal menyimpan') }
@@ -1718,7 +1761,7 @@ const HRDKaryawan = ({ user, showToast, dbData, refreshData }) => {
             <select value={attTahun} onChange={e=>setAttTahun(Number(e.target.value))} style={{ width:80,border:'1px solid #e0e0e0',borderRadius:10,padding:'8px 10px',fontSize:13,outline:'none' }}>{[2024,2025,2026].map(y=><option key={y}>{y}</option>)}</select>
           </div>
           <div style={{ display:'flex',borderBottom:'1px solid #f0f0f0',marginBottom:12,overflowX:'auto' }}>
-            {['Info','Absensi','Riwayat Izin','Payroll'].map(t=>(
+            {['Info','Absensi','Riwayat Izin','Password'].map(t=>(
               <button key={t} onClick={()=>{ setDetailTab(t); setEditMode(false) }} style={{ padding:'10px 14px',fontSize:12,fontWeight:700,border:'none',borderBottom:detailTab===t?'2px solid #E53935':'2px solid transparent',color:detailTab===t?'#E53935':'#aaa',background:'transparent',cursor:'pointer',whiteSpace:'nowrap' }}>{t}</button>
             ))}
           </div>
@@ -1775,15 +1818,6 @@ const HRDKaryawan = ({ user, showToast, dbData, refreshData }) => {
                   📋 Samakan semua hari dengan jam Senin
                 </button>
               )}
-              <div style={{ marginTop:16,padding:14,borderRadius:14,background:'#F9F9F9' }}>
-                <p style={{ fontSize:11,fontWeight:700,color:'#aaa',margin:'0 0 10px' }}>INFO GAJI</p>
-                {[['Gaji Pokok','gaji_pokok'],['Tunjangan Jabatan','tunjangan_jabatan'],['Tunjangan Transport','tunjangan_transport'],['Tunjangan Makan','tunjangan_makan'],['BPJS Kesehatan','bpjs_kesehatan'],['BPJS Ketenagakerjaan','bpjs_ketenagakerjaan'],['PPh 21','pph21']].map(([lbl,k])=>(
-                  <div key={k} style={{ display:'flex',justifyContent:'space-between',padding:'5px 0',borderBottom:'1px solid #f0f0f0',fontSize:12 }}>
-                    <span style={{ color:'#777' }}>{lbl}</span>
-                    {editMode?efv(k):<span style={{ fontWeight:600,color:'#333' }}>{formatRp(emp[k]||0)}</span>}
-                  </div>
-                ))}
-              </div>
               {editMode && <div style={{ marginTop:16,display:'flex',gap:8 }}>
                 <BtnGrad small color="green" onClick={saveEdit} disabled={loadingSave}>{loadingSave?'Menyimpan...':'💾 Simpan'}</BtnGrad>
                 <BtnGrad small outline onClick={()=>setEditMode(false)}>Batal</BtnGrad>
@@ -1875,25 +1909,8 @@ const HRDKaryawan = ({ user, showToast, dbData, refreshData }) => {
             </div>
           )}
 
-          {detailTab==='Payroll' && empPayroll && (
-            <div>
-              <div style={{ borderRadius:14,padding:16,background:'linear-gradient(135deg,#FFF8E1,#FFF3CD)',marginBottom:14 }}>
-                <p style={{ fontSize:11,color:'#888',margin:0 }}>Take Home Pay · {BNAME[attBulan]} {attTahun}</p>
-                <p style={{ fontSize:24,fontWeight:800,color:'#E53935',margin:'4px 0 2px' }}>{formatRp(empPayroll.takeHomePay)}</p>
-              </div>
-              {[['Gaji Pokok',emp.gaji_pokok||0],['Tunjangan Jabatan',emp.tunjangan_jabatan||0],['Tunjangan Transport',emp.tunjangan_transport||0],['Tunjangan Makan',emp.tunjangan_makan||0],['Bonus Lembur',empPayroll.bonusLembur]].map(([k,v])=>(
-                <div key={k} style={{ display:'flex',justifyContent:'space-between',padding:'6px 0',borderBottom:'1px solid #f5f5f5',fontSize:13 }}><span style={{ color:'#777' }}>{k}</span><span style={{ color:'#43A047',fontWeight:600 }}>+{formatRp(v)}</span></div>
-              ))}
-              <div style={{ display:'flex',justifyContent:'space-between',padding:'6px 0 12px',fontSize:13,fontWeight:700 }}><span style={{ color:'#43A047' }}>Total Penghasilan</span><span style={{ color:'#43A047' }}>{formatRp(empPayroll.totalPenghasilan)}</span></div>
-              {[['BPJS Kesehatan',emp.bpjs_kesehatan||0],['BPJS Ketenagakerjaan',emp.bpjs_ketenagakerjaan||0],['PPh 21',emp.pph21||0],['Potongan Terlambat',empPayroll.potTerlambat],['Potongan Alpha',empPayroll.potAlpha]].map(([k,v])=>(
-                <div key={k} style={{ display:'flex',justifyContent:'space-between',padding:'6px 0',borderBottom:'1px solid #f5f5f5',fontSize:13 }}><span style={{ color:'#777' }}>{k}</span><span style={{ color:'#E53935',fontWeight:600 }}>-{formatRp(v)}</span></div>
-              ))}
-              <div style={{ display:'flex',justifyContent:'space-between',padding:'8px 0 12px',fontSize:13,fontWeight:700 }}><span style={{ color:'#E53935' }}>Total Potongan</span><span style={{ color:'#E53935' }}>-{formatRp(empPayroll.totalPotongan)}</span></div>
-              <div style={{ borderRadius:12,padding:14,background:'#FFF8E1',display:'flex',justifyContent:'space-between',alignItems:'center' }}>
-                <span style={{ fontWeight:800,fontSize:14 }}>Take Home Pay</span>
-                <span style={{ fontWeight:800,fontSize:18,color:'#F5A623' }}>{formatRp(empPayroll.takeHomePay)}</span>
-              </div>
-            </div>
+          {detailTab==='Password' && (
+            <PasswordTabHRD emp={emp} showToast={showToast} dbData={dbData}/>
           )}
         </Modal>
       )}
@@ -2370,7 +2387,7 @@ const HRDMore = ({ user, showToast, onLogout, dbData, refreshData }) => {
         ))}
         <button onClick={()=>setShowChangePw(true)} style={{ padding:14,borderRadius:14,color:'#444',fontWeight:700,fontSize:14,border:'1px solid #e0e0e0',background:'white',cursor:'pointer',marginTop:4,width:'100%' }}>🔑 Ubah Password</button>
         <button onClick={onLogout} style={{ padding:14,borderRadius:14,color:'#E53935',fontWeight:700,fontSize:14,border:'2px solid #FFCDD2',background:'white',cursor:'pointer',marginTop:4,width:'100%' }}>← Keluar</button>
-        <p style={{ textAlign:'center',fontSize:10,color:'#ddd',marginTop:8 }}>#gg & Rifqi</p>
+        <p style={{ textAlign:'center',fontSize:10,color:'#ddd',marginTop:8 }}>#gg</p>
       </div>
 
       {showChangePw && <ChangePasswordModal user={user} showToast={showToast} onClose={()=>setShowChangePw(false)}/>}
@@ -2527,7 +2544,7 @@ const LoginPage = ({ onLogin }) => {
         </div>
         <BtnGrad onClick={login} disabled={loading}>{loading?'Memverifikasi...':'Masuk Sekarang'}</BtnGrad>
         <p style={{ textAlign:'center',fontSize:11,color:'#ccc',marginTop:16 }}>Lupa password? Hubungi HRD</p>
-        <p style={{ textAlign:'center',fontSize:10,color:'#ddd',marginTop:20 }}>#gg & Rifqi</p>
+        <p style={{ textAlign:'center',fontSize:10,color:'#ddd',marginTop:20 }}>#gg</p>
       </div>
     </div>
   )
