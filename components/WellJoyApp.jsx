@@ -964,15 +964,18 @@ const EmpAjukanIzin = ({ user, showToast, onBack, refreshData, dbData }) => {
   })()
 
   const [form, setForm] = useState({ jenis:'', mulai:todayWIBStr, selesai:todayWIBStr, alasan:'' })
-  const [lampiran, setLampiran] = useState(null)
+  const [lampiran, setLampiran] = useState(null)   // bukti utama (surat/foto)
+  const [lampiran2, setLampiran2] = useState(null) // screenshot chat HRD/atasan
   const [err, setErr] = useState('')
   const [loading, setLoading] = useState(false)
   const [ok, setOk] = useState(false)
   const fileRef = useRef(null)
+  const fileRef2 = useRef(null)
   const set = k=>e=>setForm(f=>({...f,[k]:e.target.value}))
 
   // Izin terlambat/setengah hari/lembur = selalu 1 hari (tanggal mulai = selesai)
   const IS_ONE_DAY = ['Izin Terlambat','Izin Setengah Hari','Izin Lembur'].includes(form.jenis)
+  const NEEDS_TWO_LAMPIRAN = ['Izin Sakit','Izin Terlambat','Izin Setengah Hari'].includes(form.jenis)
   const emp = dbData.karyawan.find(k=>k.nip===user.nip)||user
   const hari = () => {
     if (IS_ONE_DAY) return 1
@@ -993,14 +996,14 @@ const EmpAjukanIzin = ({ user, showToast, onBack, refreshData, dbData }) => {
   const info = JENIS_INFO[form.jenis]
 
   // Upload lampiran (gambar/PDF) ke Supabase Storage via REST API langsung
-  const uploadLampiran = async (file) => {
+  const uploadLampiran = async (file, bucket='lampiran-izin') => {
     try {
       const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL
       const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
       const ext = file.name.split('.').pop() || 'bin'
       const safeName = `${Date.now()}_${user.nip}.${ext}`
       const path = `${user.nip}/${safeName}`
-      const uploadUrl = `${SUPABASE_URL}/storage/v1/object/lampiran-izin/${path}`
+      const uploadUrl = `${SUPABASE_URL}/storage/v1/object/${bucket}/${path}`
       const arrayBuffer = await file.arrayBuffer()
       const bytes = new Uint8Array(arrayBuffer)
       const uploadPromise = fetch(uploadUrl, {
@@ -1011,7 +1014,7 @@ const EmpAjukanIzin = ({ user, showToast, onBack, refreshData, dbData }) => {
       const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 10000))
       const res = await Promise.race([uploadPromise, timeoutPromise])
       if (!res.ok) { console.error('[uploadLampiran] gagal status:', res.status); return null }
-      return `${SUPABASE_URL}/storage/v1/object/public/lampiran-izin/${path}`
+      return `${SUPABASE_URL}/storage/v1/object/public/${bucket}/${path}`
     } catch(e) { console.error('[uploadLampiran] exception:', e.message); return null }
   }
 
@@ -1037,14 +1040,22 @@ const EmpAjukanIzin = ({ user, showToast, onBack, refreshData, dbData }) => {
     if(!form.mulai||!form.alasan) { setErr('Semua field wajib diisi'); return }
     if(!IS_ONE_DAY && !form.selesai) { setErr('Tanggal selesai wajib diisi'); return }
     if(!lampiran) { setErr('Lampiran bukti wajib diunggah'); return }
+    if(NEEDS_TWO_LAMPIRAN && !lampiran2) { setErr('Screenshot chat dengan HRD/atasan wajib diunggah'); return }
     setLoading(true)
     showToast('⏳ Mengupload lampiran...')
-    const emp = dbData.karyawan.find(k=>k.nip===user.nip)||user
+
     const lampiranUrl = await uploadLampiran(lampiran)
-    if (!lampiranUrl) { setErr('Gagal mengupload lampiran. Coba lagi atau gunakan file yang lebih kecil.'); setLoading(false); return }
+    if (!lampiranUrl) { setErr('Gagal mengupload lampiran bukti. Coba lagi.'); setLoading(false); return }
+
+    let lampiranChatUrl = null
+    if (NEEDS_TWO_LAMPIRAN && lampiran2) {
+      lampiranChatUrl = await uploadLampiran(lampiran2, 'lampiran-chat')
+      if (!lampiranChatUrl) { setErr('Gagal mengupload lampiran chat. Coba lagi.'); setLoading(false); return }
+    }
 
     const tanggalWIB = todayWIBStr
     const driveLinkLampiran = await backupLampiranToDrive(lampiran, tanggalWIB)
+    const driveLinkChat = lampiranChatUrl ? await backupLampiranToDrive(lampiran2, tanggalWIB) : null
 
     const {data: inserted, error} = await supabase.from('izin').insert({
       nip:user.nip, nama:user.nama, jabatan:emp.jabatan||'',
@@ -1054,6 +1065,9 @@ const EmpAjukanIzin = ({ user, showToast, onBack, refreshData, dbData }) => {
       lampiran_nama: lampiran.name,
       lampiran_url: lampiranUrl,
       lampiran_drive_link: driveLinkLampiran || null,
+      lampiran_chat_nama: lampiran2?.name || null,
+      lampiran_chat_url: lampiranChatUrl || null,
+      lampiran_chat_drive_link: driveLinkChat || null,
     }).select().single()
     if(!error){
       await supabase.from('audit_log').insert({ user_name:user.nama,nip:user.nip,aktivitas:`Pengajuan ${form.jenis}`,keterangan:`${form.mulai}${!IS_ONE_DAY&&selesai!==form.mulai?`–${selesai}`:''}, ${hari()} hari` })
@@ -1147,17 +1161,40 @@ const EmpAjukanIzin = ({ user, showToast, onBack, refreshData, dbData }) => {
         </Card>
 
         <Card style={{ padding:16 }}>
+          {/* Lampiran 1 — Bukti utama */}
           <div style={{ display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10 }}>
             <div>
-              <p style={{ fontWeight:700,margin:0 }}>📎 Lampiran Bukti</p>
-              <p style={{ fontSize:11,color:'#aaa',margin:0 }}>{form.jenis==='Izin Sakit'?'Surat dokter (wajib)':'Surat izin / dokumen pendukung'}</p>
+              <p style={{ fontWeight:700,margin:0 }}>📎 {NEEDS_TWO_LAMPIRAN ? 'Lampiran Bukti' : 'Lampiran Bukti'}</p>
+              <p style={{ fontSize:11,color:'#aaa',margin:0 }}>
+                {form.jenis==='Izin Sakit' ? 'Foto surat dokter (wajib)'
+                 : form.jenis==='Izin Terlambat' ? 'Bukti keterlambatan (wajib)'
+                 : form.jenis==='Izin Setengah Hari' ? 'Bukti alasan setengah hari (wajib)'
+                 : 'Surat izin / dokumen pendukung'}
+              </p>
             </div>
             <BtnGrad small onClick={()=>fileRef.current.click()}>{lampiran?'Ganti':'Upload'}</BtnGrad>
           </div>
           <input ref={fileRef} type="file" accept="image/*,.pdf" style={{ display:'none' }} onChange={e=>{ const f=e.target.files[0]; if(!f) return; if(f.size>5*1024*1024){showToast('❌ Ukuran file maksimal 5MB');return}; setLampiran(f) }}/>
           {lampiran
-            ? <div style={{ display:'flex',alignItems:'center',gap:10,background:'#F0FFF4',padding:'10px 14px',borderRadius:10 }}><span>📄</span><span style={{ fontSize:12,fontWeight:600,color:'#2E7D32',flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap' }}>{lampiran.name}</span></div>
-            : <div style={{ border:'2px dashed #e0e0e0',borderRadius:12,padding:20,textAlign:'center',color:'#ccc',fontSize:13 }}>Belum ada lampiran</div>}
+            ? <div style={{ display:'flex',alignItems:'center',gap:10,background:'#F0FFF4',padding:'10px 14px',borderRadius:10,marginBottom:NEEDS_TWO_LAMPIRAN?12:0 }}><span>📄</span><span style={{ fontSize:12,fontWeight:600,color:'#2E7D32',flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap' }}>{lampiran.name}</span></div>
+            : <div style={{ border:'2px dashed #e0e0e0',borderRadius:12,padding:16,textAlign:'center',color:'#ccc',fontSize:13,marginBottom:NEEDS_TWO_LAMPIRAN?12:0 }}>Belum ada lampiran</div>}
+
+          {/* Lampiran 2 — Screenshot chat HRD/atasan (hanya untuk Sakit, Terlambat, Setengah Hari) */}
+          {NEEDS_TWO_LAMPIRAN && (
+            <>
+              <div style={{ display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10,paddingTop:12,borderTop:'1px dashed #e0e0e0' }}>
+                <div>
+                  <p style={{ fontWeight:700,margin:0 }}>💬 Screenshot Chat HRD/Atasan</p>
+                  <p style={{ fontSize:11,color:'#aaa',margin:0 }}>Bukti persetujuan dari HRD atau atasan (wajib)</p>
+                </div>
+                <BtnGrad small onClick={()=>fileRef2.current.click()}>{lampiran2?'Ganti':'Upload'}</BtnGrad>
+              </div>
+              <input ref={fileRef2} type="file" accept="image/*,.pdf" style={{ display:'none' }} onChange={e=>{ const f=e.target.files[0]; if(!f) return; if(f.size>5*1024*1024){showToast('❌ Ukuran file maksimal 5MB');return}; setLampiran2(f) }}/>
+              {lampiran2
+                ? <div style={{ display:'flex',alignItems:'center',gap:10,background:'#EDE7F6',padding:'10px 14px',borderRadius:10 }}><span>💬</span><span style={{ fontSize:12,fontWeight:600,color:'#4527A0',flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap' }}>{lampiran2.name}</span></div>
+                : <div style={{ border:'2px dashed #e0e0e0',borderRadius:12,padding:16,textAlign:'center',color:'#ccc',fontSize:13 }}>Belum ada screenshot chat</div>}
+            </>
+          )}
         </Card>
         <BtnGrad onClick={submit} disabled={loading}>{loading?'Mengupload & mengirim...':'Ajukan Izin'}</BtnGrad>
       </div>
@@ -1651,7 +1688,7 @@ const HRDKaryawan = ({ user, showToast, dbData, refreshData }) => {
     const {error} = await supabase.from('master_karyawan').update({
       nama:editForm.nama, email:editForm.email, no_hp:editForm.no_hp,
       jabatan:editForm.jabatan, divisi:editForm.divisi, status:editForm.status,
-      sisa_izin:Number(editForm.sisa_izin)||0, nik:editForm.nik, alamat:editForm.alamat, atasan:editForm.atasan,
+      sisa_izin:Number(editForm.sisa_izin)||0, max_izin_lainnya:Number(editForm.max_izin_lainnya)||2, nik:editForm.nik, alamat:editForm.alamat, atasan:editForm.atasan,
       jam_masuk_wajib: jadwalUpdate.jam_masuk_senin,
       jam_keluar_wajib: jadwalUpdate.jam_keluar_senin,
       ...jadwalUpdate,
@@ -1677,7 +1714,7 @@ const HRDKaryawan = ({ user, showToast, dbData, refreshData }) => {
     if (addRole === 'EMPLOYEE') {
       await supabase.from('master_karyawan').insert({
         nip:addForm.NIP,nama:addForm.Nama,jabatan:addForm.Jabatan,divisi:addForm.Divisi,email:addForm.Email,no_hp:addForm.NoHP,status:'aktif',
-        sisa_izin:2, gaji_pokok:5000000,tunjangan_jabatan:1000000,tunjangan_transport:500000,tunjangan_makan:750000,
+        sisa_izin:2, max_izin_lainnya:2, gaji_pokok:5000000,tunjangan_jabatan:1000000,tunjangan_transport:500000,tunjangan_makan:750000,
         bpjs_kesehatan:150000,bpjs_ketenagakerjaan:200000,pph21:1050000,tanggal_masuk:new Date().toISOString().split('T')[0],
         atasan:user.nama,lembur_per_jam:45000,potongan_terlambat_per_menit:5000,
         jam_masuk_wajib:'08:00',jam_keluar_wajib:'16:40',
@@ -1769,7 +1806,7 @@ const HRDKaryawan = ({ user, showToast, dbData, refreshData }) => {
           {detailTab==='Info' && (
             <div>
               {editMode && <div style={{ background:'#FFF8E1',padding:'10px 14px',borderRadius:10,fontSize:12,color:'#F57F17',fontWeight:600,marginBottom:12 }}>Mode Edit aktif</div>}
-              {[['NIP','nip'],['Nama','nama'],['NIK','nik'],['Email','email'],['No. HP','no_hp'],['Alamat','alamat'],['Divisi','divisi'],['Jabatan','jabatan'],['Tanggal Masuk','tanggal_masuk'],['Atasan','atasan'],['Sisa Izin Lainnya','sisa_izin'],['Status','status']].map(([lbl,k])=>(
+              {[['NIP','nip'],['Nama','nama'],['NIK','nik'],['Email','email'],['No. HP','no_hp'],['Alamat','alamat'],['Divisi','divisi'],['Jabatan','jabatan'],['Tanggal Masuk','tanggal_masuk'],['Atasan','atasan'],['Sisa Izin Lainnya','sisa_izin'],['Kuota Izin/Bulan','max_izin_lainnya'],['Status','status']].map(([lbl,k])=>(
                 <div key={k} style={{ display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 0',borderBottom:'1px solid #f5f5f5',fontSize:13 }}>
                   <span style={{ color:'#aaa',flexShrink:0,width:130 }}>{lbl}</span>
                   {editMode&&k!=='nip'?efv(k):<span style={{ fontWeight:600,color:'#333',textAlign:'right',flex:1,marginLeft:8 }}>{emp[k]||'-'}</span>}
@@ -2307,6 +2344,27 @@ const HRDApproval = ({ user, showToast, dbData, refreshData }) => {
             </div>
           )}
 
+          {/* Lampiran Chat HRD/Atasan */}
+          {selectedItem.lampiran_chat_url && (
+            <div style={{ marginTop:12,padding:14,borderRadius:14,border:'1px solid #EDE7F6',background:'#F5F0FF' }}>
+              <p style={{ fontSize:12,fontWeight:700,color:'#4527A0',margin:'0 0 10px' }}>💬 Screenshot Chat HRD/Atasan</p>
+              {/\.pdf$/i.test(selectedItem.lampiran_chat_nama||'') ? (
+                <div style={{ textAlign:'center',padding:'24px 12px',background:'#F9F9F9',borderRadius:10 }}>
+                  <span style={{ fontSize:40 }}>📄</span>
+                  <p style={{ fontSize:13,fontWeight:600,color:'#555',margin:'8px 0 0' }}>File PDF</p>
+                </div>
+              ) : (
+                <img src={selectedItem.lampiran_chat_url} alt="chat" style={{ width:'100%',borderRadius:10,cursor:'pointer',border:'1px solid #D1C4E9' }} onClick={()=>setPreviewUrl(selectedItem.lampiran_chat_url)}/>
+              )}
+              <div style={{ display:'flex',gap:8,marginTop:10 }}>
+                {!/\.pdf$/i.test(selectedItem.lampiran_chat_nama||'') && (
+                  <button onClick={()=>setPreviewUrl(selectedItem.lampiran_chat_url)} style={{ flex:1,padding:'10px 0',background:'#EDE7F6',border:'none',borderRadius:10,fontSize:12,fontWeight:700,color:'#4527A0',cursor:'pointer' }}>👁️ Preview</button>
+                )}
+                <a href={selectedItem.lampiran_chat_url} target="_blank" rel="noreferrer" style={{ flex:1,display:'flex',alignItems:'center',justifyContent:'center',padding:'10px 0',background:'#E8F5E9',borderRadius:10,fontSize:12,fontWeight:700,color:'#2E7D32',textDecoration:'none' }}>⬇️ Download</a>
+              </div>
+            </div>
+          )}
+
           {(freshStatus(selectedItem.id)||selectedItem.status)==='MENUNGGU' ? (
             <>
               <div style={{ marginBottom:12 }}>
@@ -2578,6 +2636,30 @@ export default function WellJoyApp() {
         supabase.from('announcements').select('*').order('tanggal',{ascending:false}),
         supabase.from('handbook').select('*').order('created_at'),
       ])
+
+      // ── Auto-refill sisa_izin_lainnya setiap awal bulan ──
+      const nowWIB = new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Jakarta'}))
+      const thisMonth = `${nowWIB.getFullYear()}-${String(nowWIB.getMonth()+1).padStart(2,'0')}-01`
+      const needRefill = (karyawan||[]).filter(k=>{
+        if (!k.last_izin_refill) return true
+        // Refill kalau last_izin_refill sebelum bulan ini
+        return k.last_izin_refill < thisMonth
+      })
+      if (needRefill.length > 0) {
+        await Promise.all(needRefill.map(k=>
+          supabase.from('master_karyawan').update({
+            sisa_izin: k.max_izin_lainnya ?? 2,
+            last_izin_refill: thisMonth,
+          }).eq('nip', k.nip)
+        ))
+        // Reload karyawan setelah refill
+        const {data:karyawanRefreshed} = await supabase.from('master_karyawan').select('*').order('nama')
+        setDbData({ users:users||[],karyawan:karyawanRefreshed||[],attendance:attendance||[],izin:izin||[],notifications:notifications||[],auditLog:auditLog||[],announcements:announcements||[],handbook:handbook||[] })
+        console.log(`[refill] ${needRefill.length} karyawan di-refill izin bulan ${thisMonth}`)
+        setLoadingData(false)
+        return
+      }
+
       setDbData({ users:users||[],karyawan:karyawan||[],attendance:attendance||[],izin:izin||[],notifications:notifications||[],auditLog:auditLog||[],announcements:announcements||[],handbook:handbook||[] })
     } catch(e){ console.error('Fetch error:',e) }
     setLoadingData(false)
