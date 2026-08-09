@@ -1,22 +1,12 @@
 // app/api/get-slip/route.js
-//
-// Mapping kolom FINAL (verified dari spreadsheet + konfirmasi user):
-// A(0)=NIP, B(1)=Nama, C(2)=Gaji Pokok, D(3)=Tunjangan Makan,
-// E(4)=Tunjangan Disiplin, F(5)=Bonus Penjualan, G(6)=Total Masuk,
-// H(7)=Total Lembur, I(8)=Total Bonus Lembur,
-// J(9)=Total Penghasilan, K(10)=Take Home Pay,
-// L(11)=Total Izin Sakit, M(12)=Total Izin Terlambat,
-// N(13)=Total Izin Setengah Hari, O(14)=Total Terlambat(Menit),
-// P(15)=Total Jumlah Terlambat, Q(16)=Izin Lainnya, R(17)=Total Alpha,
-// S(18)=Total Denda Terlambat, T(19)=Total Denda Izin,
-// U(20)=Total Denda Alpha, V(21)=Total Denda, W(22)=Performa Kedisiplinan
-
-import { getSheetsClient } from '../../lib/google-auth'
+// Baca data slip gaji via Google Sheets API + API Key (tidak butuh OAuth)
+// Spreadsheet harus public (Anyone with the link - Viewer)
 
 export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
 
 function parseAngka(str) {
-  if (str === null || str === undefined || str === '') return 0
+  if (!str && str !== 0) return 0
   const s = String(str).replace(/\./g, '').replace(',', '.').replace(/[^0-9.\-]/g, '')
   const n = parseFloat(s)
   return isNaN(n) ? 0 : n
@@ -31,18 +21,28 @@ export async function GET(request) {
     const nip = searchParams.get('nip')
     if (!nip) return Response.json({ error: 'Parameter nip wajib diisi' }, { status: 400 })
 
-    const sheets = getSheetsClient()
+    const API_KEY = process.env.GOOGLE_SHEETS_API_KEY
+    if (!API_KEY) return Response.json({ error: 'GOOGLE_SHEETS_API_KEY belum diset di env var' }, { status: 500 })
 
-    // Header di baris 5, data mulai baris 6, sampai kolom W
-    const res = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: `${TAB_NAME}!A5:W200`,
-    })
+    // Fetch via Sheets API v4 dengan API key — tidak butuh OAuth
+    const range = encodeURIComponent(`${TAB_NAME}!A5:W200`)
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${range}?key=${API_KEY}`
 
-    const rows = res.data.values || []
+    const res = await fetch(url)
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}))
+      const msg = errBody?.error?.message || res.statusText
+      console.error('[get-slip] Sheets API error:', res.status, msg)
+      return Response.json({ error: `Sheets API error: ${msg}` }, { status: res.status })
+    }
+
+    const json = await res.json()
+    const rows = json.values || []
+
     if (rows.length < 2) return Response.json({ error: 'Data tidak ditemukan di spreadsheet' }, { status: 404 })
 
-    const dataRows = rows.slice(1) // skip header row (baris 5)
+    // rows[0] = header (baris 5), rows[1+] = data mulai baris 6
+    const dataRows = rows.slice(1)
     const nipCari = nip.trim().toLowerCase()
     const row = dataRows.find(r => String(r[0] || '').trim().toLowerCase() === nipCari)
 
@@ -54,40 +54,36 @@ export async function GET(request) {
       }, { status: 404 })
     }
 
+    // Mapping kolom (A=0 NIP, B=1 Nama, C=2 Gaji Pokok ... sesuai sheet)
     const slip = {
-      nip:                   String(row[0]  || '').trim(),  // A
-      nama:                  String(row[1]  || '').trim(),  // B
-      // Penghasilan
+      nip:                   String(row[0]  || '').trim(),
+      nama:                  String(row[1]  || '').trim(),
       gajiPokok:             parseAngka(row[2]),   // C
       tunjanganMakan:        parseAngka(row[3]),   // D
-      tunjanganKedisiplinan: parseAngka(row[4]),   // E: Tunjangan Disiplin
+      tunjanganKedisiplinan: parseAngka(row[4]),   // E
       bonusPenjualan:        parseAngka(row[5]),   // F
-      totalMasuk:            parseAngka(row[6]),   // G: Total Masuk (hari)
-      totalLembur:           parseAngka(row[7]),   // H: Total Lembur (jam)
+      totalMasuk:            parseAngka(row[6]),   // G
+      totalLembur:           parseAngka(row[7]),   // H
       totalBonusLembur:      parseAngka(row[8]),   // I
       totalPenghasilan:      parseAngka(row[9]),   // J
-      takeHomePay:           parseAngka(row[10]),  // K ← langsung dari sheet
-      // Rekap izin
+      takeHomePay:           parseAngka(row[10]),  // K
       totalIzinSakit:        parseAngka(row[11]),  // L
       totalIzinTerlambat:    parseAngka(row[12]),  // M
       totalIzinSetengahHari: parseAngka(row[13]),  // N
       totalTerlambatMenit:   parseAngka(row[14]),  // O
-      totalJumlahTerlambat:  parseAngka(row[15]),  // P: jumlah kejadian terlambat
+      totalJumlahTerlambat:  parseAngka(row[15]),  // P
       izinLainnya:           parseAngka(row[16]),  // Q
       totalAlpha:            parseAngka(row[17]),  // R
-      // Potongan
       totalDendaTerlambat:   parseAngka(row[18]),  // S
       totalDendaIzin:        parseAngka(row[19]),  // T
       totalDendaAlpha:       parseAngka(row[20]),  // U
       totalDenda:            parseAngka(row[21]),  // V
-      // Performa
       performaKedisiplinan:  String(row[22] || '').trim(), // W
     }
 
     return Response.json({ success: true, slip })
   } catch (e) {
-    const detail = e?.response?.data?.error || e?.errors || e.message
-    console.error('[get-slip] error:', JSON.stringify(detail, null, 2))
-    return Response.json({ error: detail?.message || detail || 'Gagal membaca data slip' }, { status: 500 })
+    console.error('[get-slip] error:', e.message)
+    return Response.json({ error: e.message || 'Gagal membaca data slip' }, { status: 500 })
   }
 }
