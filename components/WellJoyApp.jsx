@@ -2617,7 +2617,7 @@ export default function WellJoyApp() {
   const [toast, setToast] = useState('')
   const [dbData, setDbData] = useState({ users:[],karyawan:[],attendance:[],izin:[],notifications:[],auditLog:[],announcements:[],handbook:[] })
   const [loadingData, setLoadingData] = useState(false)
-  const lastFetchRef = React.useRef(0)
+  const lastFetchRef = useRef(0)
 
   const showToast = useCallback(msg=>{ setToast(msg); setTimeout(()=>setToast(''),3000) },[])
 
