@@ -217,7 +217,7 @@ const NotifPanel = ({ nip, onClose, notifications=[], onMarkRead, onMarkAllRead,
 }
 
 // ─── COMPRESS IMAGE (resize langsung di canvas, tanpa Image element) ──────────
-const compressCanvas = (srcCanvas, maxWidth = 800, quality = 0.65) => {
+const compressCanvas = (srcCanvas, maxWidth = 480, quality = 0.55) => {
   const w = srcCanvas.width
   const h = srcCanvas.height
   const ratio = Math.min(1, maxWidth / w)
@@ -996,13 +996,13 @@ const EmpAjukanIzin = ({ user, showToast, onBack, refreshData, dbData }) => {
   const info = JENIS_INFO[form.jenis]
 
   // Upload lampiran (gambar/PDF) ke Supabase Storage via REST API langsung
-  const uploadLampiran = async (file, bucket='lampiran-izin') => {
+  const uploadLampiran = async (file, bucket='lampiran-izin', subfolder='bukti') => {
     try {
       const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL
       const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
       const ext = file.name.split('.').pop() || 'bin'
       const safeName = `${Date.now()}_${user.nip}.${ext}`
-      const path = `${user.nip}/${safeName}`
+      const path = `${subfolder}/${user.nip}/${safeName}`
       const uploadUrl = `${SUPABASE_URL}/storage/v1/object/${bucket}/${path}`
       const arrayBuffer = await file.arrayBuffer()
       const bytes = new Uint8Array(arrayBuffer)
@@ -1049,7 +1049,7 @@ const EmpAjukanIzin = ({ user, showToast, onBack, refreshData, dbData }) => {
 
     let lampiranChatUrl = null
     if (NEEDS_TWO_LAMPIRAN && lampiran2) {
-      lampiranChatUrl = await uploadLampiran(lampiran2, 'lampiran-chat')
+      lampiranChatUrl = await uploadLampiran(lampiran2, 'lampiran-izin', 'chat')
       if (!lampiranChatUrl) { setErr('Gagal mengupload lampiran chat. Coba lagi.'); setLoading(false); return }
     }
 
@@ -1886,40 +1886,40 @@ const HRDKaryawan = ({ user, showToast, dbData, refreshData }) => {
                     {/* Clock In */}
                     <div style={{ background:'#F0FFF4',borderRadius:10,padding:10 }}>
                       <p style={{ fontSize:10,fontWeight:700,color:'#2E7D32',margin:'0 0 6px' }}>🟢 Clock In</p>
-                      {a.foto_masuk && (
-                        <a href={a.foto_masuk} target="_blank" rel="noreferrer">
+                      {a.foto_masuk_drive_link && (
+                        <a href={a.foto_masuk_drive_link} target="_blank" rel="noreferrer">
                           <img
-                            src={a.foto_masuk}
+                            src={a.foto_masuk_drive_link}
                             alt="masuk"
                             style={{ width:'100%',borderRadius:8,maxHeight:80,objectFit:'cover',display:'block',marginBottom:6,background:'#ddd' }}
                             onError={(e)=>{
-                              console.error('[img] gagal load foto_masuk:', a.foto_masuk)
+                              console.error('[img] gagal load foto_masuk:', a.foto_masuk_drive_link)
                               e.target.style.display='none'
                               e.target.nextSibling.style.display='block'
                             }}
                           />
-                          <p style={{ fontSize:9,color:'#E53935',margin:'0 0 4px',display:'none',wordBreak:'break-all' }}>⚠️ Gagal load: {a.foto_masuk?.slice(0,40)}...</p>
+                          <p style={{ fontSize:9,color:'#E53935',margin:'0 0 4px',display:'none',wordBreak:'break-all' }}>⚠️ Gagal load: {a.foto_masuk_drive_link?.slice(0,40)}...</p>
                         </a>
                       )}
                       {a.lokasi_masuk && <p style={{ fontSize:10,color:'#388E3C',margin:0,lineHeight:1.3 }}>📍 {a.lokasi_masuk}</p>}
                       {a.koordinat_masuk && (
                         <a href={`https://maps.google.com/?q=${a.koordinat_masuk}`} target="_blank" rel="noreferrer" style={{ fontSize:10,color:'#1565C0',fontWeight:700,display:'block',marginTop:4 }}>🗺️ Lihat Maps</a>
                       )}
-                      {!a.foto_masuk && !a.lokasi_masuk && <p style={{ fontSize:10,color:'#ccc',margin:0 }}>Tidak ada data</p>}
+                      {!a.foto_masuk_drive_link && !a.lokasi_masuk && <p style={{ fontSize:10,color:'#ccc',margin:0 }}>Tidak ada data</p>}
                     </div>
                     {/* Clock Out */}
                     <div style={{ background:'#FFF5F5',borderRadius:10,padding:10 }}>
                       <p style={{ fontSize:10,fontWeight:700,color:'#C62828',margin:'0 0 6px' }}>🔴 Clock Out</p>
-                      {a.foto_keluar && (
-                        <a href={a.foto_keluar} target="_blank" rel="noreferrer">
-                          <img src={a.foto_keluar} alt="keluar" style={{ width:'100%',borderRadius:8,maxHeight:80,objectFit:'cover',display:'block',marginBottom:6 }}/>
+                      {a.foto_keluar_drive_link && (
+                        <a href={a.foto_keluar_drive_link} target="_blank" rel="noreferrer">
+                          <img src={a.foto_keluar_drive_link} alt="keluar" style={{ width:'100%',borderRadius:8,maxHeight:80,objectFit:'cover',display:'block',marginBottom:6 }}/>
                         </a>
                       )}
                       {a.lokasi_keluar && <p style={{ fontSize:10,color:'#C62828',margin:0,lineHeight:1.3 }}>📍 {a.lokasi_keluar}</p>}
                       {a.koordinat_keluar && (
                         <a href={`https://maps.google.com/?q=${a.koordinat_keluar}`} target="_blank" rel="noreferrer" style={{ fontSize:10,color:'#1565C0',fontWeight:700,display:'block',marginTop:4 }}>🗺️ Lihat Maps</a>
                       )}
-                      {!a.foto_keluar && !a.lokasi_keluar && <p style={{ fontSize:10,color:'#ccc',margin:0 }}>{a.jam_keluar?'Tidak ada data':'Belum clock out'}</p>}
+                      {!a.foto_keluar_drive_link && !a.lokasi_keluar && <p style={{ fontSize:10,color:'#ccc',margin:0 }}>{a.jam_keluar?'Tidak ada data':'Belum clock out'}</p>}
                     </div>
                   </div>
                   {a.menit_terlambat>0 && (
@@ -2083,9 +2083,9 @@ const HRDAbsensi = ({ user, showToast, dbData, refreshData }) => {
                       <p style={{ fontSize:13,fontWeight:700,color:'#2E7D32',margin:0 }}>{a.jam_masuk?`${formatTgl(a.tanggal)} ${a.jam_masuk}`:'-'}</p>
                       {a.lokasi_masuk && <div style={{ display:'flex',alignItems:'flex-start',gap:4,marginTop:4 }}><span style={{ fontSize:10,flexShrink:0,marginTop:1 }}>📍</span><span style={{ fontSize:10,color:'#388E3C',lineHeight:1.3 }}>{a.lokasi_masuk}</span></div>}
                       {a.koordinat_masuk && <a href={`https://www.google.com/maps?q=${a.koordinat_masuk}`} target="_blank" rel="noreferrer" style={{ display:'inline-flex',alignItems:'center',gap:4,marginTop:6,fontSize:10,color:'#1565C0',fontWeight:600,textDecoration:'none',background:'#E3F2FD',padding:'3px 8px',borderRadius:6 }}>🗺️ Lihat Maps</a>}
-                      {a.foto_masuk
-                        ? <img onClick={()=>setFotoModal({url:a.foto_masuk,label:'Foto Clock In',lokasi:a.lokasi_masuk,coords:a.koordinat_masuk})}
-                            src={a.foto_masuk} alt="masuk"
+                      {a.foto_masuk_drive_link
+                        ? <img onClick={()=>setFotoModal({url:a.foto_masuk_drive_link,label:'Foto Clock In',lokasi:a.lokasi_masuk,coords:a.koordinat_masuk})}
+                            src={a.foto_masuk_drive_link} alt="masuk"
                             style={{ width:'100%',borderRadius:10,maxHeight:90,objectFit:'cover',display:'block',marginTop:6,cursor:'pointer',border:'2px solid #C8E6C9' }}
                             onError={e=>e.target.style.display='none'}/>
                         : <p style={{ fontSize:10,color:'#ccc',marginTop:6,margin:0 }}>Tidak ada foto</p>}
@@ -2095,9 +2095,9 @@ const HRDAbsensi = ({ user, showToast, dbData, refreshData }) => {
                       <p style={{ fontSize:13,fontWeight:700,color:a.jam_keluar?'#C62828':'#aaa',margin:0 }}>{a.jam_keluar?`${formatTgl(a.tanggal)} ${a.jam_keluar}`:'Belum clock out'}</p>
                       {a.lokasi_keluar && <div style={{ display:'flex',alignItems:'flex-start',gap:4,marginTop:4 }}><span style={{ fontSize:10,flexShrink:0,marginTop:1 }}>📍</span><span style={{ fontSize:10,color:'#C62828',lineHeight:1.3 }}>{a.lokasi_keluar}</span></div>}
                       {a.koordinat_keluar && <a href={`https://www.google.com/maps?q=${a.koordinat_keluar}`} target="_blank" rel="noreferrer" style={{ display:'inline-flex',alignItems:'center',gap:4,marginTop:6,fontSize:10,color:'#1565C0',fontWeight:600,textDecoration:'none',background:'#E3F2FD',padding:'3px 8px',borderRadius:6 }}>🗺️ Lihat Maps</a>}
-                      {a.foto_keluar
-                        ? <img onClick={()=>setFotoModal({url:a.foto_keluar,label:'Foto Clock Out',lokasi:a.lokasi_keluar,coords:a.koordinat_keluar})}
-                            src={a.foto_keluar} alt="keluar"
+                      {a.foto_keluar_drive_link
+                        ? <img onClick={()=>setFotoModal({url:a.foto_keluar_drive_link,label:'Foto Clock Out',lokasi:a.lokasi_keluar,coords:a.koordinat_keluar})}
+                            src={a.foto_keluar_drive_link} alt="keluar"
                             style={{ width:'100%',borderRadius:10,maxHeight:90,objectFit:'cover',display:'block',marginTop:6,cursor:'pointer',border:'2px solid #FFCDD2' }}
                             onError={e=>e.target.style.display='none'}/>
                         : <p style={{ fontSize:10,color:'#ccc',marginTop:6,margin:0 }}>{a.jam_keluar?'Tidak ada foto':'Belum clock out'}</p>}
@@ -2617,23 +2617,29 @@ export default function WellJoyApp() {
   const [toast, setToast] = useState('')
   const [dbData, setDbData] = useState({ users:[],karyawan:[],attendance:[],izin:[],notifications:[],auditLog:[],announcements:[],handbook:[] })
   const [loadingData, setLoadingData] = useState(false)
+  const lastFetchRef = React.useRef(0)
 
   const showToast = useCallback(msg=>{ setToast(msg); setTimeout(()=>setToast(''),3000) },[])
 
-  const fetchData = useCallback(async()=>{
+  const fetchData = useCallback(async(force=false)=>{
+    const now = Date.now()
+    if (!force && now - lastFetchRef.current < 3000) return
+    lastFetchRef.current = now
     setLoadingData(true)
     try {
       const [
         {data:users},{data:karyawan},{data:attendance},{data:izin},
         {data:notifications},{data:auditLog},{data:announcements},{data:handbook}
       ] = await Promise.all([
-        supabase.from('users').select('*'),
+        supabase.from('users').select('nip,nama,email,no_hp,role,status,password'),
         supabase.from('master_karyawan').select('*').order('nama'),
-        supabase.from('attendance').select('*').order('tanggal',{ascending:false}),
-        supabase.from('izin').select('*').order('created_at',{ascending:false}),
-        supabase.from('notifications').select('*').order('created_at',{ascending:false}),
+        // foto_masuk/foto_keluar dihapus dari select (mungkin base64, boros egress)
+        // Foto ditampilkan via foto_masuk_drive_link / foto_keluar_drive_link
+        supabase.from('attendance').select('id,nip,nama,tanggal,jam_masuk,jam_keluar,status_kehadiran,menit_terlambat,jam_lembur,durasi,lokasi_masuk,lokasi_keluar,koordinat_masuk,koordinat_keluar,foto_masuk_drive_link,foto_keluar_drive_link,status_validasi').gte('tanggal', (() => { const d=new Date(); d.setDate(d.getDate()-90); return d.toISOString().split('T')[0] })()).order('tanggal',{ascending:false}),
+        supabase.from('izin').select('id,nip,nama,jabatan,jenis_izin,tanggal_mulai,tanggal_selesai,jumlah_hari,keterangan,status,diajukan_pada,lampiran_nama,lampiran_url,lampiran_drive_link,lampiran_chat_nama,lampiran_chat_url,lampiran_chat_drive_link').order('created_at',{ascending:false}).limit(200),
+        supabase.from('notifications').select('*').order('created_at',{ascending:false}).limit(50),
         supabase.from('audit_log').select('*').order('created_at',{ascending:false}).limit(50),
-        supabase.from('announcements').select('*').order('tanggal',{ascending:false}),
+        supabase.from('announcements').select('*').order('tanggal',{ascending:false}).limit(20),
         supabase.from('handbook').select('*').order('created_at'),
       ])
 
