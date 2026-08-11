@@ -2030,24 +2030,71 @@ const HRDAbsensi = ({ user, showToast, dbData, refreshData }) => {
   const [showHadir, setShowHadir] = useState(false)
   const [showTerlambat, setShowTerlambat] = useState(false)
 
-  const records = dbData.attendance.filter(a=>{
-    const matchDate = a.tanggal===tanggal
-    const matchSearch = !search||a.nama?.toLowerCase().includes(search.toLowerCase())||a.nip?.includes(search)
-    return matchDate&&matchSearch
-  })
+  // Fetch attendance untuk tanggal yang dipilih (on-demand, bukan dari dbData global)
+  const [attData, setAttData] = useState([])
+  const [loadingAtt, setLoadingAtt] = useState(false)
+  useEffect(()=>{
+    let cancelled = false
+    const fetch = async()=>{
+      setLoadingAtt(true)
+      const {data} = await supabase.from('attendance')
+        .select('id,nip,nama,tanggal,jam_masuk,jam_keluar,status_kehadiran,menit_terlambat,jam_lembur,durasi,lokasi_masuk,lokasi_keluar,koordinat_masuk,koordinat_keluar,foto_masuk_drive_link,foto_keluar_drive_link,status_validasi')
+        .eq('tanggal', tanggal)
+      if (!cancelled) { setAttData(data||[]); setLoadingAtt(false) }
+    }
+    fetch()
+    return ()=>{ cancelled=true }
+  },[tanggal])
+
+  // Juga fetch chart bulan (aggregate per tanggal) secara terpisah
+  const [chartBulan, setChartBulan] = useState(new Date().getMonth())
+  const [chartTahun, setChartTahun] = useState(new Date().getFullYear())
+  const [chartData, setChartData] = useState({})
+  useEffect(()=>{
+    const fetch = async()=>{
+      const start = `${chartTahun}-${String(chartBulan+1).padStart(2,'0')}-01`
+      const end   = `${chartTahun}-${String(chartBulan+1).padStart(2,'0')}-31`
+      const {data} = await supabase.from('attendance')
+        .select('tanggal,status_kehadiran')
+        .gte('tanggal',start).lte('tanggal',end)
+      // Group by tanggal — hitung hadir per hari
+      const map = {}
+      ;(data||[]).forEach(r=>{ map[r.tanggal]=(map[r.tanggal]||0)+(['HADIR','WFH','TERLAMBAT'].includes(r.status_kehadiran)?1:0) })
+      setChartData(map)
+    }
+    fetch()
+  },[chartBulan,chartTahun])
+
+  const records = attData.filter(a=>!search||a.nama?.toLowerCase().includes(search.toLowerCase())||a.nip?.includes(search))
 
   const hadirList      = records.filter(a=>['HADIR','WFH'].includes(a.status_kehadiran))
   const terlambatList  = records.filter(a=>a.status_kehadiran==='TERLAMBAT')
   const hadir          = hadirList.length
   const terlambat      = terlambatList.length
 
-  // Karyawan yang BELUM absen sama sekali (tidak ada record di tanggal itu)
-  const sudahAbsenNip = new Set(dbData.attendance.filter(a=>a.tanggal===tanggal).map(a=>a.nip))
-  const semuaKaryawan = dbData.karyawan.filter(k=>k.role!=='hrd')
-  const belumAbsenList = semuaKaryawan.filter(k=>!sudahAbsenNip.has(k.nip)&&(!search||k.nama?.toLowerCase().includes(search.toLowerCase())||k.nip?.includes(search)))
-  const belumAbsen = belumAbsenList.length
+  // Belum absen: dari attData local (tanggal yang dipilih)
+  const sudahAbsenNip  = new Set(attData.map(a=>a.nip))
+  const belumAbsenList = dbData.karyawan.filter(k=>k.role!=='hrd'&&!sudahAbsenNip.has(k.nip)&&(!search||k.nama?.toLowerCase().includes(search.toLowerCase())||k.nip?.includes(search)))
+  const belumAbsen     = belumAbsenList.length
+  const totalKaryawan  = dbData.karyawan.filter(k=>k.role!=='hrd').length
 
-  const formatTgl  = tgl=>{ if(!tgl) return '-'; const d=new Date(tgl); return `${String(d.getDate()).padStart(2,'0')}-${String(d.getMonth()+1).padStart(2,'0')}-${d.getFullYear()}` }
+  const formatTgl = tgl=>{ if(!tgl) return '-'; const d=new Date(tgl); return `${String(d.getDate()).padStart(2,'0')}-${String(d.getMonth()+1).padStart(2,'0')}-${d.getFullYear()}` }
+
+  // Chart: dari chartData aggregate
+  const daysInMonth = new Date(chartTahun,chartBulan+1,0).getDate()
+  const kehadiranBulan = Array.from({length:daysInMonth},(_,i)=>{
+    const d = i+1
+    const tglStr = `${chartTahun}-${String(chartBulan+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`
+    const dayW = new Date(tglStr).getDay()
+    const isWeekend = dayW===0
+    const isFuture = tglStr > tanggal
+    if(isFuture||isWeekend) return { d, tglStr, v:null, isFuture, isWeekend }
+    const hadirHari = chartData[tglStr] || 0
+    const persen = totalKaryawan>0 ? Math.round(hadirHari/totalKaryawan*100) : 0
+    return { d, tglStr, v:persen, isFuture:false, isWeekend:false }
+  })
+  const workDays = kehadiranBulan.filter(k=>!k.isWeekend&&!k.isFuture&&k.v!==null)
+  const avgKehadiran = workDays.length>0 ? Math.round(workDays.reduce((s,k)=>s+k.v,0)/workDays.length) : 0
 
   return (
     <div style={{ flex:1,overflowY:'auto',paddingBottom:80,background:'#F8F8F8' }}>
@@ -2057,6 +2104,7 @@ const HRDAbsensi = ({ user, showToast, dbData, refreshData }) => {
       </div>
       <div style={{ padding:'0 16px',display:'flex',flexDirection:'column',gap:10 }}>
         <input type="date" value={tanggal} onChange={e=>setTanggal(e.target.value)} style={{ width:'100%',background:'white',border:'1px solid #e0e0e0',borderRadius:14,padding:'12px 14px',fontSize:13,outline:'none',boxSizing:'border-box' }}/>
+        {loadingAtt && <div style={{ textAlign:'center',padding:20,color:'#aaa',fontSize:13 }}>⏳ Memuat absensi...</div>}
 
         {/* Statistik 3 kotak */}
         <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:10 }}>
@@ -2338,7 +2386,7 @@ const HRDApproval = ({ user, showToast, dbData, refreshData }) => {
           {selectedItem.lampiran_nama && (
             <div style={{ marginBottom:16,border:'1px solid #e0e0e0',borderRadius:14,overflow:'hidden' }}>
               <p style={{ fontSize:11,fontWeight:700,color:'#1565C0',padding:'8px 14px',background:'#E3F2FD',margin:0 }}>📎 Lampiran: {selectedItem.lampiran_nama}</p>
-              {selectedItem.lampiran_url
+              {(selectedItem.lampiran_drive_link || selectedItem.lampiran_url)
                 ? <div style={{ padding:12 }}>
                     {/\.pdf$/i.test(selectedItem.lampiran_nama) ? (
                       <div style={{ textAlign:'center',padding:'24px 12px',background:'#F9F9F9',borderRadius:10 }}>
@@ -2346,13 +2394,17 @@ const HRDApproval = ({ user, showToast, dbData, refreshData }) => {
                         <p style={{ fontSize:13,fontWeight:600,color:'#555',margin:'8px 0 0' }}>File PDF</p>
                       </div>
                     ) : (
-                      <img src={selectedItem.lampiran_url} alt="lampiran" style={{ width:'100%',borderRadius:10,cursor:'pointer',border:'1px solid #e0e0e0' }} onClick={()=>setPreviewUrl(selectedItem.lampiran_url)}/>
+                      <img
+                        src={driveImgUrl(selectedItem.lampiran_drive_link) || selectedItem.lampiran_url}
+                        alt="lampiran"
+                        style={{ width:'100%',borderRadius:10,cursor:'pointer',border:'1px solid #e0e0e0' }}
+                        onClick={()=>setPreviewUrl(selectedItem.lampiran_drive_link || selectedItem.lampiran_url)}/>
                     )}
                     <div style={{ display:'flex',gap:8,marginTop:10 }}>
                       {!/\.pdf$/i.test(selectedItem.lampiran_nama) && (
-                        <button onClick={()=>setPreviewUrl(selectedItem.lampiran_url)} style={{ flex:1,padding:'10px 0',background:'#E3F2FD',border:'none',borderRadius:10,fontSize:12,fontWeight:700,color:'#1565C0',cursor:'pointer' }}>👁️ Preview</button>
+                        <button onClick={()=>setPreviewUrl(selectedItem.lampiran_drive_link || selectedItem.lampiran_url)} style={{ flex:1,padding:'10px 0',background:'#E3F2FD',border:'none',borderRadius:10,fontSize:12,fontWeight:700,color:'#1565C0',cursor:'pointer' }}>👁️ Preview</button>
                       )}
-                      <a href={selectedItem.lampiran_url} target="_blank" rel="noreferrer" style={{ flex:1,display:'flex',alignItems:'center',justifyContent:'center',padding:'10px 0',background:'#E8F5E9',borderRadius:10,fontSize:12,fontWeight:700,color:'#2E7D32',textDecoration:'none' }}>⬇️ Download</a>
+                      <a href={selectedItem.lampiran_drive_link || selectedItem.lampiran_url} target="_blank" rel="noreferrer" style={{ flex:1,display:'flex',alignItems:'center',justifyContent:'center',padding:'10px 0',background:'#E8F5E9',borderRadius:10,fontSize:12,fontWeight:700,color:'#2E7D32',textDecoration:'none' }}>🔗 Buka Drive</a>
                     </div>
                   </div>
                 : <p style={{ padding:'12px 14px',fontSize:12,color:'#aaa',margin:0 }}>File belum tersedia.</p>}
@@ -2360,7 +2412,7 @@ const HRDApproval = ({ user, showToast, dbData, refreshData }) => {
           )}
 
           {/* Lampiran Chat HRD/Atasan */}
-          {selectedItem.lampiran_chat_url && (
+          {(selectedItem.lampiran_chat_drive_link || selectedItem.lampiran_chat_url) && (
             <div style={{ marginTop:12,padding:14,borderRadius:14,border:'1px solid #EDE7F6',background:'#F5F0FF' }}>
               <p style={{ fontSize:12,fontWeight:700,color:'#4527A0',margin:'0 0 10px' }}>💬 Screenshot Chat HRD/Atasan</p>
               {/\.pdf$/i.test(selectedItem.lampiran_chat_nama||'') ? (
@@ -2369,13 +2421,17 @@ const HRDApproval = ({ user, showToast, dbData, refreshData }) => {
                   <p style={{ fontSize:13,fontWeight:600,color:'#555',margin:'8px 0 0' }}>File PDF</p>
                 </div>
               ) : (
-                <img src={selectedItem.lampiran_chat_url} alt="chat" style={{ width:'100%',borderRadius:10,cursor:'pointer',border:'1px solid #D1C4E9' }} onClick={()=>setPreviewUrl(selectedItem.lampiran_chat_url)}/>
+                <img
+                  src={driveImgUrl(selectedItem.lampiran_chat_drive_link) || selectedItem.lampiran_chat_url}
+                  alt="chat"
+                  style={{ width:'100%',borderRadius:10,cursor:'pointer',border:'1px solid #D1C4E9' }}
+                  onClick={()=>setPreviewUrl(selectedItem.lampiran_chat_drive_link || selectedItem.lampiran_chat_url)}/>
               )}
               <div style={{ display:'flex',gap:8,marginTop:10 }}>
                 {!/\.pdf$/i.test(selectedItem.lampiran_chat_nama||'') && (
-                  <button onClick={()=>setPreviewUrl(selectedItem.lampiran_chat_url)} style={{ flex:1,padding:'10px 0',background:'#EDE7F6',border:'none',borderRadius:10,fontSize:12,fontWeight:700,color:'#4527A0',cursor:'pointer' }}>👁️ Preview</button>
+                  <button onClick={()=>setPreviewUrl(selectedItem.lampiran_chat_drive_link || selectedItem.lampiran_chat_url)} style={{ flex:1,padding:'10px 0',background:'#EDE7F6',border:'none',borderRadius:10,fontSize:12,fontWeight:700,color:'#4527A0',cursor:'pointer' }}>👁️ Preview</button>
                 )}
-                <a href={selectedItem.lampiran_chat_url} target="_blank" rel="noreferrer" style={{ flex:1,display:'flex',alignItems:'center',justifyContent:'center',padding:'10px 0',background:'#E8F5E9',borderRadius:10,fontSize:12,fontWeight:700,color:'#2E7D32',textDecoration:'none' }}>⬇️ Download</a>
+                <a href={selectedItem.lampiran_chat_drive_link || selectedItem.lampiran_chat_url} target="_blank" rel="noreferrer" style={{ flex:1,display:'flex',alignItems:'center',justifyContent:'center',padding:'10px 0',background:'#E8F5E9',borderRadius:10,fontSize:12,fontWeight:700,color:'#2E7D32',textDecoration:'none' }}>🔗 Buka Drive</a>
               </div>
             </div>
           )}
@@ -2402,7 +2458,8 @@ const HRDApproval = ({ user, showToast, dbData, refreshData }) => {
 
       {previewUrl && (
         <Modal title="Preview Lampiran" onClose={()=>setPreviewUrl(null)}>
-          <img src={previewUrl} alt="preview" style={{ width:'100%',borderRadius:12,border:'1px solid #e0e0e0' }}/>
+          <img src={driveImgUrlFull(previewUrl) || previewUrl} alt="preview" style={{ width:'100%',borderRadius:12,border:'1px solid #e0e0e0' }}/>
+          <a href={previewUrl} target="_blank" rel="noreferrer" style={{ display:'block',textAlign:'center',marginTop:8,fontSize:12,color:'#1565C0',fontWeight:600 }}>🔗 Buka di Google Drive</a>
           <div style={{ marginTop:12 }}><BtnGrad onClick={()=>setPreviewUrl(null)}>Tutup</BtnGrad></div>
         </Modal>
       )}
@@ -2627,6 +2684,8 @@ const LoginPage = ({ onLogin }) => {
 export default function WellJoyApp() {
   const [screen, setScreen] = useState('loading')  // loading dulu, cek session
   const [user, setUser] = useState(null)
+  const userRef = useRef(null)
+  const setUserWithRef = (u) => { userRef.current = u; setUserWithRef(u) }
   const [empNav, setEmpNav] = useState('home')
   const [hrdNav, setHrdNav] = useState('dashboard')
   const [toast, setToast] = useState('')
@@ -2641,50 +2700,95 @@ export default function WellJoyApp() {
     if (!force && now - lastFetchRef.current < 3000) return
     lastFetchRef.current = now
     setLoadingData(true)
+
+    // Ambil user dari state terbaru
+    const currentUser = userRef.current
+    const isHRDUser = currentUser?.role === 'HRD'
+    const nip = currentUser?.nip
+
     try {
-      const [
-        {data:users},{data:karyawan},{data:attendance},{data:izin},
-        {data:notifications},{data:auditLog},{data:announcements},{data:handbook}
-      ] = await Promise.all([
-        supabase.from('users').select('nip,nama,email,no_hp,role,status,password'),
-        supabase.from('master_karyawan').select('*').order('nama'),
-        // foto_masuk/foto_keluar dihapus dari select (mungkin base64, boros egress)
-        // Foto ditampilkan via foto_masuk_drive_link / foto_keluar_drive_link
-        supabase.from('attendance').select('id,nip,nama,tanggal,jam_masuk,jam_keluar,status_kehadiran,menit_terlambat,jam_lembur,durasi,lokasi_masuk,lokasi_keluar,koordinat_masuk,koordinat_keluar,foto_masuk_drive_link,foto_keluar_drive_link,status_validasi').gte('tanggal', (() => { const d=new Date(); d.setDate(d.getDate()-90); return d.toISOString().split('T')[0] })()).order('tanggal',{ascending:false}),
-        supabase.from('izin').select('id,nip,nama,jabatan,jenis_izin,tanggal_mulai,tanggal_selesai,jumlah_hari,keterangan,status,diajukan_pada,lampiran_nama,lampiran_url,lampiran_drive_link,lampiran_chat_nama,lampiran_chat_url,lampiran_chat_drive_link').order('created_at',{ascending:false}).limit(200),
-        supabase.from('notifications').select('*').order('created_at',{ascending:false}).limit(50),
-        supabase.from('audit_log').select('*').order('created_at',{ascending:false}).limit(50),
-        supabase.from('announcements').select('*').order('tanggal',{ascending:false}).limit(20),
-        supabase.from('handbook').select('*').order('created_at'),
-      ])
+      if (isHRDUser) {
+        // ── HRD: load minimal dulu (dashboard + karyawan + approval saja) ──
+        // Attendance TIDAK di-fetch di sini — dimuat on-demand per tab/tanggal
+        const todayStr = (() => { const d=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Jakarta'})); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}` })()
+        const [
+          {data:users},{data:karyawan},{data:todayAtt},{data:izin},
+          {data:notifications},{data:auditLog},{data:announcements},{data:handbook}
+        ] = await Promise.all([
+          supabase.from('users').select('nip,nama,email,no_hp,role,status,password'),
+          supabase.from('master_karyawan').select('*').order('nama'),
+          // Hanya absensi HARI INI untuk dashboard stats
+          supabase.from('attendance').select('id,nip,nama,tanggal,jam_masuk,jam_keluar,status_kehadiran,menit_terlambat,foto_masuk_drive_link,foto_keluar_drive_link,lokasi_masuk,lokasi_keluar,koordinat_masuk,koordinat_keluar,status_validasi')
+            .eq('tanggal', todayStr),
+          // Hanya MENUNGGU untuk approval badge count + review
+          supabase.from('izin').select('id,nip,nama,jabatan,jenis_izin,tanggal_mulai,tanggal_selesai,jumlah_hari,keterangan,status,diajukan_pada,lampiran_nama,lampiran_url,lampiran_drive_link,lampiran_chat_nama,lampiran_chat_url,lampiran_chat_drive_link').order('created_at',{ascending:false}).limit(200),
+          supabase.from('notifications').select('*').order('created_at',{ascending:false}).limit(50),
+          supabase.from('audit_log').select('*').order('created_at',{ascending:false}).limit(50),
+          supabase.from('announcements').select('*').order('tanggal',{ascending:false}).limit(20),
+          supabase.from('handbook').select('*').order('created_at'),
+        ])
 
-      // ── Auto-refill sisa_izin_lainnya setiap awal bulan ──
-      const nowWIB = new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Jakarta'}))
-      const thisMonth = `${nowWIB.getFullYear()}-${String(nowWIB.getMonth()+1).padStart(2,'0')}-01`
-      const needRefill = (karyawan||[]).filter(k=>{
-        if (!k.last_izin_refill) return true
-        // Refill kalau last_izin_refill sebelum bulan ini
-        return k.last_izin_refill < thisMonth
-      })
-      if (needRefill.length > 0) {
-        await Promise.all(needRefill.map(k=>
-          supabase.from('master_karyawan').update({
-            sisa_izin: k.max_izin_lainnya ?? 2,
-            last_izin_refill: thisMonth,
-          }).eq('nip', k.nip)
-        ))
-        // Reload karyawan setelah refill
-        const {data:karyawanRefreshed} = await supabase.from('master_karyawan').select('*').order('nama')
-        setDbData({ users:users||[],karyawan:karyawanRefreshed||[],attendance:attendance||[],izin:izin||[],notifications:notifications||[],auditLog:auditLog||[],announcements:announcements||[],handbook:handbook||[] })
-        console.log(`[refill] ${needRefill.length} karyawan di-refill izin bulan ${thisMonth}`)
-        setLoadingData(false)
-        return
+        // Auto-refill izin bulanan
+        const nowWIB = new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Jakarta'}))
+        const thisMonth = `${nowWIB.getFullYear()}-${String(nowWIB.getMonth()+1).padStart(2,'0')}-01`
+        const needRefill = (karyawan||[]).filter(k=>!k.last_izin_refill||k.last_izin_refill<thisMonth)
+        if (needRefill.length > 0) {
+          await Promise.all(needRefill.map(k=>supabase.from('master_karyawan').update({ sisa_izin:k.max_izin_lainnya??2, last_izin_refill:thisMonth }).eq('nip',k.nip)))
+          const {data:kr} = await supabase.from('master_karyawan').select('*').order('nama')
+          setDbData({ users:users||[],karyawan:kr||[],attendance:todayAtt||[],izin:izin||[],notifications:notifications||[],auditLog:auditLog||[],announcements:announcements||[],handbook:handbook||[] })
+          setLoadingData(false); return
+        }
+        setDbData({ users:users||[],karyawan:karyawan||[],attendance:todayAtt||[],izin:izin||[],notifications:notifications||[],auditLog:auditLog||[],announcements:announcements||[],handbook:handbook||[] })
+
+      } else {
+        // ── KARYAWAN: hanya data milik sendiri — jauh lebih ringan ──
+        const [
+          {data:karyawan},{data:attendance},{data:izin},
+          {data:notifications},{data:announcements},{data:handbook}
+        ] = await Promise.all([
+          // Profile sendiri saja (bukan semua karyawan) — perlu untuk cek sisa_izin, jadwal, dll
+          supabase.from('master_karyawan').select('*').eq('nip', nip).maybeSingle(),
+          // Absensi sendiri, 90 hari terakhir
+          supabase.from('attendance').select('id,nip,nama,tanggal,jam_masuk,jam_keluar,status_kehadiran,menit_terlambat,jam_lembur,durasi,lokasi_masuk,koordinat_masuk,foto_masuk_drive_link,foto_keluar_drive_link,status_validasi')
+            .eq('nip', nip)
+            .gte('tanggal', (() => { const d=new Date(); d.setDate(d.getDate()-90); return d.toISOString().split('T')[0] })())
+            .order('tanggal',{ascending:false}),
+          // Izin sendiri saja
+          supabase.from('izin').select('id,nip,nama,jenis_izin,tanggal_mulai,tanggal_selesai,jumlah_hari,keterangan,status,diajukan_pada,lampiran_nama,lampiran_url,lampiran_drive_link,lampiran_chat_nama,lampiran_chat_url,lampiran_chat_drive_link')
+            .eq('nip', nip).order('created_at',{ascending:false}).limit(50),
+          // Notifikasi sendiri saja
+          supabase.from('notifications').select('*').eq('nip', nip).order('created_at',{ascending:false}).limit(20),
+          // Pengumuman & handbook: semua (kecil)
+          supabase.from('announcements').select('*').order('tanggal',{ascending:false}).limit(20),
+          supabase.from('handbook').select('*').order('created_at'),
+        ])
+
+        // Auto-refill izin bulan ini untuk karyawan ini
+        const nowWIB = new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Jakarta'}))
+        const thisMonth = `${nowWIB.getFullYear()}-${String(nowWIB.getMonth()+1).padStart(2,'0')}-01`
+        const k = karyawan
+        if (k && (!k.last_izin_refill || k.last_izin_refill < thisMonth)) {
+          await supabase.from('master_karyawan').update({ sisa_izin:k.max_izin_lainnya??2, last_izin_refill:thisMonth }).eq('nip', nip)
+          const {data:kr} = await supabase.from('master_karyawan').select('*').eq('nip',nip).maybeSingle()
+          setDbData(d=>({ ...d, karyawan:[kr||k], attendance:attendance||[], izin:izin||[], notifications:notifications||[], announcements:announcements||[], handbook:handbook||[], users:[], auditLog:[] }))
+          setLoadingData(false); return
+        }
+
+        setDbData({
+          users: [],       // karyawan tidak butuh data user lain
+          auditLog: [],    // karyawan tidak butuh audit log
+          karyawan: karyawan ? [karyawan] : [],
+          attendance: attendance||[],
+          izin: izin||[],
+          notifications: notifications||[],
+          announcements: announcements||[],
+          handbook: handbook||[],
+        })
       }
-
-      setDbData({ users:users||[],karyawan:karyawan||[],attendance:attendance||[],izin:izin||[],notifications:notifications||[],auditLog:auditLog||[],announcements:announcements||[],handbook:handbook||[] })
     } catch(e){ console.error('Fetch error:',e) }
     setLoadingData(false)
   },[])
+
 
   // ── Restore session dari localStorage saat pertama load ──
   useEffect(()=>{
@@ -2696,7 +2800,7 @@ export default function WellJoyApp() {
         supabase.from('users').select('*').eq('nip', parsed.nip).eq('status','aktif').maybeSingle()
           .then(({ data }) => {
             if (data) {
-              setUser({ ...parsed, ...data })
+              setUserWithRef({ ...parsed, ...data })
               setScreen('app')
             } else {
               localStorage.removeItem('welljoy_session')
@@ -2705,7 +2809,7 @@ export default function WellJoyApp() {
           })
           .catch(() => {
             // Kalau offline/error, pakai data cache dulu
-            setUser(parsed)
+            setUserWithRef(parsed)
             setScreen('app')
           })
       } else {
@@ -2721,7 +2825,7 @@ export default function WellJoyApp() {
   const [ajukanIzin, setAjukanIzin] = useState(false)
 
   const handleLogin = userData=>{
-    setUser(userData)
+    setUserWithRef(userData)
     setScreen('app')
     // Simpan session — jangan simpan password
     const { password:_, ...safeUser } = userData
@@ -2731,7 +2835,7 @@ export default function WellJoyApp() {
 
   const handleLogout = async()=>{
     if(user) await supabase.from('audit_log').insert({ user_name:user.nama,nip:user.nip,aktivitas:'Logout dari sistem',keterangan:'' })
-    setUser(null)
+    setUserWithRef(null)
     setScreen('login')
     setAjukanIzin(false)
     localStorage.removeItem('welljoy_session')
