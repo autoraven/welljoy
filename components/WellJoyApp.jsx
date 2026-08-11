@@ -6,6 +6,20 @@ import { supabase } from '../lib/supabase'
 const formatRp = n => `Rp ${Number(n).toLocaleString('id-ID')}`
 const BNAME = ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember']
 
+// Konversi Google Drive webViewLink ke URL yang bisa langsung dipakai sebagai <img src>
+// Input:  https://drive.google.com/file/d/FILE_ID/view?usp=...
+// Output: https://drive.google.com/thumbnail?id=FILE_ID&sz=w480
+// (sz=w480 = thumbnail 480px lebar, cukup untuk preview tanpa load file penuh)
+const driveImgUrl = (link, size='w480') => {
+  if (!link) return null
+  // Format: /file/d/{id}/view
+  const m = link.match(/\/d\/([\w-]+)/)
+  if (!m) return link // fallback ke link asli kalau format tidak dikenal
+  return `https://drive.google.com/thumbnail?id=${m[1]}&sz=${size}`
+}
+// Full size untuk modal (open in new tab tetap pakai webViewLink)
+const driveImgUrlFull = (link) => driveImgUrl(link, 'w1200')
+
 // ── Kirim/update 1 baris ke Google Sheets (Absensi atau Izin) ──
 // Dipakai di event clock-in, clock-out, ajukan izin, approve/tolak izin.
 // `sheet`: 'absensi' | 'izin'
@@ -1889,7 +1903,7 @@ const HRDKaryawan = ({ user, showToast, dbData, refreshData }) => {
                       {a.foto_masuk_drive_link && (
                         <a href={a.foto_masuk_drive_link} target="_blank" rel="noreferrer">
                           <img
-                            src={a.foto_masuk_drive_link}
+                            src={driveImgUrl(a.foto_masuk_drive_link)}
                             alt="masuk"
                             style={{ width:'100%',borderRadius:8,maxHeight:80,objectFit:'cover',display:'block',marginBottom:6,background:'#ddd' }}
                             onError={(e)=>{
@@ -1912,7 +1926,7 @@ const HRDKaryawan = ({ user, showToast, dbData, refreshData }) => {
                       <p style={{ fontSize:10,fontWeight:700,color:'#C62828',margin:'0 0 6px' }}>🔴 Clock Out</p>
                       {a.foto_keluar_drive_link && (
                         <a href={a.foto_keluar_drive_link} target="_blank" rel="noreferrer">
-                          <img src={a.foto_keluar_drive_link} alt="keluar" style={{ width:'100%',borderRadius:8,maxHeight:80,objectFit:'cover',display:'block',marginBottom:6 }}/>
+                          <img src={driveImgUrl(a.foto_keluar_drive_link)} alt="keluar" style={{ width:'100%',borderRadius:8,maxHeight:80,objectFit:'cover',display:'block',marginBottom:6 }}/>
                         </a>
                       )}
                       {a.lokasi_keluar && <p style={{ fontSize:10,color:'#C62828',margin:0,lineHeight:1.3 }}>📍 {a.lokasi_keluar}</p>}
@@ -2085,7 +2099,7 @@ const HRDAbsensi = ({ user, showToast, dbData, refreshData }) => {
                       {a.koordinat_masuk && <a href={`https://www.google.com/maps?q=${a.koordinat_masuk}`} target="_blank" rel="noreferrer" style={{ display:'inline-flex',alignItems:'center',gap:4,marginTop:6,fontSize:10,color:'#1565C0',fontWeight:600,textDecoration:'none',background:'#E3F2FD',padding:'3px 8px',borderRadius:6 }}>🗺️ Lihat Maps</a>}
                       {a.foto_masuk_drive_link
                         ? <img onClick={()=>setFotoModal({url:a.foto_masuk_drive_link,label:'Foto Clock In',lokasi:a.lokasi_masuk,coords:a.koordinat_masuk})}
-                            src={a.foto_masuk_drive_link} alt="masuk"
+                            src={driveImgUrl(a.foto_masuk_drive_link)} alt="masuk"
                             style={{ width:'100%',borderRadius:10,maxHeight:90,objectFit:'cover',display:'block',marginTop:6,cursor:'pointer',border:'2px solid #C8E6C9' }}
                             onError={e=>e.target.style.display='none'}/>
                         : <p style={{ fontSize:10,color:'#ccc',marginTop:6,margin:0 }}>Tidak ada foto</p>}
@@ -2097,7 +2111,7 @@ const HRDAbsensi = ({ user, showToast, dbData, refreshData }) => {
                       {a.koordinat_keluar && <a href={`https://www.google.com/maps?q=${a.koordinat_keluar}`} target="_blank" rel="noreferrer" style={{ display:'inline-flex',alignItems:'center',gap:4,marginTop:6,fontSize:10,color:'#1565C0',fontWeight:600,textDecoration:'none',background:'#E3F2FD',padding:'3px 8px',borderRadius:6 }}>🗺️ Lihat Maps</a>}
                       {a.foto_keluar_drive_link
                         ? <img onClick={()=>setFotoModal({url:a.foto_keluar_drive_link,label:'Foto Clock Out',lokasi:a.lokasi_keluar,coords:a.koordinat_keluar})}
-                            src={a.foto_keluar_drive_link} alt="keluar"
+                            src={driveImgUrl(a.foto_keluar_drive_link)} alt="keluar"
                             style={{ width:'100%',borderRadius:10,maxHeight:90,objectFit:'cover',display:'block',marginTop:6,cursor:'pointer',border:'2px solid #FFCDD2' }}
                             onError={e=>e.target.style.display='none'}/>
                         : <p style={{ fontSize:10,color:'#ccc',marginTop:6,margin:0 }}>{a.jam_keluar?'Tidak ada foto':'Belum clock out'}</p>}
@@ -2190,7 +2204,8 @@ const HRDAbsensi = ({ user, showToast, dbData, refreshData }) => {
 
       {fotoModal && (
         <Modal title={fotoModal.label} onClose={()=>setFotoModal(null)}>
-          <img src={fotoModal.url} alt={fotoModal.label} style={{ width:'100%',borderRadius:14,objectFit:'cover',maxHeight:300 }}/>
+          <img src={driveImgUrlFull(fotoModal.url)} alt={fotoModal.label} style={{ width:'100%',borderRadius:14,objectFit:'cover',maxHeight:300 }}/>
+          <a href={fotoModal.url} target="_blank" rel="noreferrer" style={{ display:'block',textAlign:'center',marginTop:8,fontSize:12,color:'#1565C0',fontWeight:600 }}>🔗 Buka di Google Drive</a>
           {fotoModal.lokasi && (
             <div style={{ marginTop:10,padding:'10px 14px',background:'#F0FFF4',borderRadius:12,border:'1px solid #C8E6C9' }}>
               <div style={{ display:'flex',alignItems:'flex-start',gap:6,marginBottom:fotoModal.coords?8:0 }}>
