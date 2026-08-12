@@ -697,7 +697,12 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
     const lokasiLabel  = loc?.label  || 'Tidak diketahui'
     const lokasiCoords = loc?.coords || null
 
-    // Upload langsung ke Google Drive (skip Supabase Storage untuk hemat egress)
+    const path = `${tanggalWIB}/${user.nip}_masuk_${jamStr.replace(':','')}.jpg`
+    console.log('[clockIn] uploading...')
+    const fotoUrl = await uploadFoto(foto, path)
+    console.log('[clockIn] upload selesai, fotoUrl:', fotoUrl ? 'OK (storage)' : 'fallback base64')
+
+    // Backup ke Google Drive — ditunggu hasilnya supaya link bisa dicatat ke Sheets
     const driveLinkMasuk = await uploadToDrive(foto, 'absensi', `masuk_${jamStr.replace(':','')}.jpg`, { tanggal: tanggalWIB, nip: user.nip, nama: user.nama })
 
     console.log('[clockIn] insert ke database...')
@@ -705,6 +710,7 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
       nip:user.nip, nama:user.nama, tanggal:tanggalWIB, jam_masuk:jamStr,
       status_kehadiran:status, menit_terlambat:menit,
       lokasi_masuk:lokasiLabel, koordinat_masuk:lokasiCoords,
+      foto_masuk: fotoUrl || foto,
       foto_masuk_drive_link: driveLinkMasuk || null,
       status_validasi:'MENUNGGU'
     })
@@ -752,13 +758,17 @@ const EmpHome = ({ user, showToast, onLogout, dbData, refreshData }) => {
     // Pulang cepat = clock out SEBELUM jam keluar wajib
     const menitPulangCepat = Math.max(0, keluarWajibMenit - (kH*60+kM))
 
-    // Upload langsung ke Google Drive (skip Supabase Storage untuk hemat egress)
+    const path = `${tanggalWIB}/${user.nip}_keluar_${jamStr.replace(':','')}.jpg`
+    const fotoUrl = await uploadFoto(foto, path)
+
+    // Backup ke Google Drive — ditunggu hasilnya supaya link bisa dicatat ke Sheets
     const driveLinkKeluar = await uploadToDrive(foto, 'absensi', `keluar_${jamStr.replace(':','')}.jpg`, { tanggal: tanggalWIB, nip: user.nip, nama: user.nama })
 
     const { error } = await supabase.from('attendance').update({
       jam_keluar:jamStr,
       durasi:`${Math.floor(durMenit/60)}j ${durMenit%60}m`,
       jam_lembur:Math.round(lemburJam*100)/100,
+      foto_keluar: fotoUrl || foto,
       foto_keluar_drive_link: driveLinkKeluar || null,
       lokasi_keluar:lokasiLabel, koordinat_keluar:lokasiCoords
     }).eq('id', todayAtt.id)
@@ -1384,21 +1394,9 @@ const HRDDashboard = ({ user, showToast, onNavChange, dbData, refreshData }) => 
   const belumAbsenList = dbData.karyawan.filter(k=>k.role!=='hrd'&&!sudahAbsenNip.has(k.nip))
   const belumAbsen     = belumAbsenList.length
   const menungguIzin   = dbData.izin.filter(c=>c.status==='MENUNGGU').length
-  // ── Chart: fetch aggregate per bulan (bukan dari dbData) ──
+  // ── Persentase kehadiran per-tanggal bulan ini (scrollable) ──
   const [chartBulan, setChartBulan] = useState(todayWIBDate.getMonth())
   const [chartTahun, setChartTahun] = useState(todayWIBDate.getFullYear())
-  const [chartData, setChartData] = useState({})
-  useEffect(()=>{
-    const fetch = async()=>{
-      const start = `${chartTahun}-${String(chartBulan+1).padStart(2,'0')}-01`
-      const end   = `${chartTahun}-${String(chartBulan+1).padStart(2,'0')}-31`
-      const {data} = await supabase.from('attendance').select('tanggal,status_kehadiran').gte('tanggal',start).lte('tanggal',end)
-      const map = {}
-      ;(data||[]).forEach(r=>{ map[r.tanggal]=(map[r.tanggal]||0)+(['HADIR','WFH','TERLAMBAT'].includes(r.status_kehadiran)?1:0) })
-      setChartData(map)
-    }
-    fetch()
-  },[chartBulan,chartTahun])
 
   const totalKaryawan = dbData.karyawan.filter(k=>k.role!=='hrd').length
   const daysInMonth = new Date(chartTahun, chartBulan+1, 0).getDate()
@@ -1407,9 +1405,9 @@ const HRDDashboard = ({ user, showToast, onNavChange, dbData, refreshData }) => 
     const tglStr = `${chartTahun}-${String(chartBulan+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`
     const isFuture = tglStr > today
     const dayW = new Date(tglStr).getDay()
-    const isWeekend = dayW===0
+    const isWeekend = dayW===0 // hanya Minggu yang dikecualikan, Sabtu tetap masuk
     if(isFuture||isWeekend) return { d, tglStr, v:null, isFuture, isWeekend }
-    const hadirHari = chartData[tglStr] || 0
+    const hadirHari = dbData.attendance.filter(a=>a.tanggal===tglStr&&['HADIR','WFH','TERLAMBAT'].includes(a.status_kehadiran)).length
     const persen = totalKaryawan>0 ? Math.round(hadirHari/totalKaryawan*100) : 0
     return { d, tglStr, v:persen, isFuture:false, isWeekend:false }
   })
@@ -1628,23 +1626,6 @@ const HRDKaryawan = ({ user, showToast, dbData, refreshData }) => {
   const [detailTab, setDetailTab] = useState('Info')
   const [attBulan, setAttBulan] = useState(new Date().getMonth())
   const [attTahun, setAttTahun] = useState(new Date().getFullYear())
-  const [empAtt, setEmpAtt] = useState([])
-  const [loadingEmpAtt, setLoadingEmpAtt] = useState(false)
-  useEffect(()=>{
-    if(!selectedNIP || detailTab!=='Absensi') return
-    let cancelled=false
-    const fetch = async()=>{
-      setLoadingEmpAtt(true)
-      const start=`${attTahun}-${String(attBulan+1).padStart(2,'0')}-01`
-      const end=`${attTahun}-${String(attBulan+1).padStart(2,'0')}-31`
-      const {data}=await supabase.from('attendance')
-        .select('id,tanggal,jam_masuk,jam_keluar,status_kehadiran,menit_terlambat,jam_lembur,durasi,lokasi_masuk,koordinat_masuk,foto_masuk_drive_link,foto_keluar_drive_link')
-        .eq('nip',selectedNIP).gte('tanggal',start).lte('tanggal',end).order('tanggal',{ascending:false})
-      if(!cancelled){ setEmpAtt(data||[]); setLoadingEmpAtt(false) }
-    }
-    fetch()
-    return ()=>{ cancelled=true }
-  },[selectedNIP,detailTab,attBulan,attTahun])
   const [editMode, setEditMode] = useState(false)
   const [editForm, setEditForm] = useState({})
   const [showAdd, setShowAdd] = useState(false)
@@ -1706,6 +1687,7 @@ const HRDKaryawan = ({ user, showToast, dbData, refreshData }) => {
   const divisiList = ['Semua',...new Set(dbData.karyawan.map(k=>k.divisi).filter(Boolean))]
   const filtered = dbData.karyawan.filter(k=>(filterDiv==='Semua'||k.divisi===filterDiv)&&(!search||k.nama?.toLowerCase().includes(search.toLowerCase())||k.nip?.includes(search)))
   const emp = selectedNIP ? dbData.karyawan.find(k=>k.nip===selectedNIP) : null
+  const empAtt = emp ? dbData.attendance.filter(a=>{ const d=new Date(a.tanggal); return a.nip===emp.nip&&d.getMonth()===attBulan&&d.getFullYear()===attTahun }) : []
   const empPayroll = emp ? calcPayroll(emp,empAtt) : null
   const empIzin = emp ? dbData.izin.filter(c=>c.nip===emp.nip) : []
 
@@ -1901,8 +1883,7 @@ const HRDKaryawan = ({ user, showToast, dbData, refreshData }) => {
                   <div key={l} style={{ borderRadius:10,padding:10,textAlign:'center',background:bg }}><p style={{ fontSize:16,fontWeight:800,color:c,margin:0 }}>{v}</p><p style={{ fontSize:11,color:c,margin:0 }}>{l}</p></div>
                 ))}
               </div>}
-              {loadingEmpAtt ? <p style={{ textAlign:'center',color:'#aaa',padding:24,fontSize:13 }}>⏳ Memuat...</p>
-              : empAtt.length===0?<p style={{ textAlign:'center',color:'#aaa',padding:24,fontSize:13 }}>Tidak ada data</p>
+              {empAtt.length===0?<p style={{ textAlign:'center',color:'#aaa',padding:24,fontSize:13 }}>Tidak ada data</p>
               :empAtt.map((a,i)=>(
                 <div key={i} style={{ border:'1px solid #f0f0f0',borderRadius:14,padding:12,marginBottom:8 }}>
                   <div style={{ display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8 }}>
@@ -2049,71 +2030,24 @@ const HRDAbsensi = ({ user, showToast, dbData, refreshData }) => {
   const [showHadir, setShowHadir] = useState(false)
   const [showTerlambat, setShowTerlambat] = useState(false)
 
-  // Fetch attendance untuk tanggal yang dipilih (on-demand, bukan dari dbData global)
-  const [attData, setAttData] = useState([])
-  const [loadingAtt, setLoadingAtt] = useState(false)
-  useEffect(()=>{
-    let cancelled = false
-    const fetch = async()=>{
-      setLoadingAtt(true)
-      const {data} = await supabase.from('attendance')
-        .select('id,nip,nama,tanggal,jam_masuk,jam_keluar,status_kehadiran,menit_terlambat,jam_lembur,durasi,lokasi_masuk,lokasi_keluar,koordinat_masuk,koordinat_keluar,foto_masuk_drive_link,foto_keluar_drive_link,status_validasi')
-        .eq('tanggal', tanggal)
-      if (!cancelled) { setAttData(data||[]); setLoadingAtt(false) }
-    }
-    fetch()
-    return ()=>{ cancelled=true }
-  },[tanggal])
-
-  // Juga fetch chart bulan (aggregate per tanggal) secara terpisah
-  const [chartBulan, setChartBulan] = useState(new Date().getMonth())
-  const [chartTahun, setChartTahun] = useState(new Date().getFullYear())
-  const [chartData, setChartData] = useState({})
-  useEffect(()=>{
-    const fetch = async()=>{
-      const start = `${chartTahun}-${String(chartBulan+1).padStart(2,'0')}-01`
-      const end   = `${chartTahun}-${String(chartBulan+1).padStart(2,'0')}-31`
-      const {data} = await supabase.from('attendance')
-        .select('tanggal,status_kehadiran')
-        .gte('tanggal',start).lte('tanggal',end)
-      // Group by tanggal — hitung hadir per hari
-      const map = {}
-      ;(data||[]).forEach(r=>{ map[r.tanggal]=(map[r.tanggal]||0)+(['HADIR','WFH','TERLAMBAT'].includes(r.status_kehadiran)?1:0) })
-      setChartData(map)
-    }
-    fetch()
-  },[chartBulan,chartTahun])
-
-  const records = attData.filter(a=>!search||a.nama?.toLowerCase().includes(search.toLowerCase())||a.nip?.includes(search))
+  const records = dbData.attendance.filter(a=>{
+    const matchDate = a.tanggal===tanggal
+    const matchSearch = !search||a.nama?.toLowerCase().includes(search.toLowerCase())||a.nip?.includes(search)
+    return matchDate&&matchSearch
+  })
 
   const hadirList      = records.filter(a=>['HADIR','WFH'].includes(a.status_kehadiran))
   const terlambatList  = records.filter(a=>a.status_kehadiran==='TERLAMBAT')
   const hadir          = hadirList.length
   const terlambat      = terlambatList.length
 
-  // Belum absen: dari attData local (tanggal yang dipilih)
-  const sudahAbsenNip  = new Set(attData.map(a=>a.nip))
-  const belumAbsenList = dbData.karyawan.filter(k=>k.role!=='hrd'&&!sudahAbsenNip.has(k.nip)&&(!search||k.nama?.toLowerCase().includes(search.toLowerCase())||k.nip?.includes(search)))
-  const belumAbsen     = belumAbsenList.length
-  const totalKaryawan  = dbData.karyawan.filter(k=>k.role!=='hrd').length
+  // Karyawan yang BELUM absen sama sekali (tidak ada record di tanggal itu)
+  const sudahAbsenNip = new Set(dbData.attendance.filter(a=>a.tanggal===tanggal).map(a=>a.nip))
+  const semuaKaryawan = dbData.karyawan.filter(k=>k.role!=='hrd')
+  const belumAbsenList = semuaKaryawan.filter(k=>!sudahAbsenNip.has(k.nip)&&(!search||k.nama?.toLowerCase().includes(search.toLowerCase())||k.nip?.includes(search)))
+  const belumAbsen = belumAbsenList.length
 
-  const formatTgl = tgl=>{ if(!tgl) return '-'; const d=new Date(tgl); return `${String(d.getDate()).padStart(2,'0')}-${String(d.getMonth()+1).padStart(2,'0')}-${d.getFullYear()}` }
-
-  // Chart: dari chartData aggregate
-  const daysInMonth = new Date(chartTahun,chartBulan+1,0).getDate()
-  const kehadiranBulan = Array.from({length:daysInMonth},(_,i)=>{
-    const d = i+1
-    const tglStr = `${chartTahun}-${String(chartBulan+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`
-    const dayW = new Date(tglStr).getDay()
-    const isWeekend = dayW===0
-    const isFuture = tglStr > tanggal
-    if(isFuture||isWeekend) return { d, tglStr, v:null, isFuture, isWeekend }
-    const hadirHari = chartData[tglStr] || 0
-    const persen = totalKaryawan>0 ? Math.round(hadirHari/totalKaryawan*100) : 0
-    return { d, tglStr, v:persen, isFuture:false, isWeekend:false }
-  })
-  const workDays = kehadiranBulan.filter(k=>!k.isWeekend&&!k.isFuture&&k.v!==null)
-  const avgKehadiran = workDays.length>0 ? Math.round(workDays.reduce((s,k)=>s+k.v,0)/workDays.length) : 0
+  const formatTgl  = tgl=>{ if(!tgl) return '-'; const d=new Date(tgl); return `${String(d.getDate()).padStart(2,'0')}-${String(d.getMonth()+1).padStart(2,'0')}-${d.getFullYear()}` }
 
   return (
     <div style={{ flex:1,overflowY:'auto',paddingBottom:80,background:'#F8F8F8' }}>
@@ -2123,7 +2057,6 @@ const HRDAbsensi = ({ user, showToast, dbData, refreshData }) => {
       </div>
       <div style={{ padding:'0 16px',display:'flex',flexDirection:'column',gap:10 }}>
         <input type="date" value={tanggal} onChange={e=>setTanggal(e.target.value)} style={{ width:'100%',background:'white',border:'1px solid #e0e0e0',borderRadius:14,padding:'12px 14px',fontSize:13,outline:'none',boxSizing:'border-box' }}/>
-        {loadingAtt && <div style={{ textAlign:'center',padding:20,color:'#aaa',fontSize:13 }}>⏳ Memuat absensi...</div>}
 
         {/* Statistik 3 kotak */}
         <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:10 }}>
@@ -2405,7 +2338,7 @@ const HRDApproval = ({ user, showToast, dbData, refreshData }) => {
           {selectedItem.lampiran_nama && (
             <div style={{ marginBottom:16,border:'1px solid #e0e0e0',borderRadius:14,overflow:'hidden' }}>
               <p style={{ fontSize:11,fontWeight:700,color:'#1565C0',padding:'8px 14px',background:'#E3F2FD',margin:0 }}>📎 Lampiran: {selectedItem.lampiran_nama}</p>
-              {(selectedItem.lampiran_drive_link || selectedItem.lampiran_url)
+              {selectedItem.lampiran_url
                 ? <div style={{ padding:12 }}>
                     {/\.pdf$/i.test(selectedItem.lampiran_nama) ? (
                       <div style={{ textAlign:'center',padding:'24px 12px',background:'#F9F9F9',borderRadius:10 }}>
@@ -2413,17 +2346,13 @@ const HRDApproval = ({ user, showToast, dbData, refreshData }) => {
                         <p style={{ fontSize:13,fontWeight:600,color:'#555',margin:'8px 0 0' }}>File PDF</p>
                       </div>
                     ) : (
-                      <img
-                        src={driveImgUrl(selectedItem.lampiran_drive_link) || selectedItem.lampiran_url}
-                        alt="lampiran"
-                        style={{ width:'100%',borderRadius:10,cursor:'pointer',border:'1px solid #e0e0e0' }}
-                        onClick={()=>setPreviewUrl(selectedItem.lampiran_drive_link || selectedItem.lampiran_url)}/>
+                      <img src={selectedItem.lampiran_url} alt="lampiran" style={{ width:'100%',borderRadius:10,cursor:'pointer',border:'1px solid #e0e0e0' }} onClick={()=>setPreviewUrl(selectedItem.lampiran_url)}/>
                     )}
                     <div style={{ display:'flex',gap:8,marginTop:10 }}>
                       {!/\.pdf$/i.test(selectedItem.lampiran_nama) && (
-                        <button onClick={()=>setPreviewUrl(selectedItem.lampiran_drive_link || selectedItem.lampiran_url)} style={{ flex:1,padding:'10px 0',background:'#E3F2FD',border:'none',borderRadius:10,fontSize:12,fontWeight:700,color:'#1565C0',cursor:'pointer' }}>👁️ Preview</button>
+                        <button onClick={()=>setPreviewUrl(selectedItem.lampiran_url)} style={{ flex:1,padding:'10px 0',background:'#E3F2FD',border:'none',borderRadius:10,fontSize:12,fontWeight:700,color:'#1565C0',cursor:'pointer' }}>👁️ Preview</button>
                       )}
-                      <a href={selectedItem.lampiran_drive_link || selectedItem.lampiran_url} target="_blank" rel="noreferrer" style={{ flex:1,display:'flex',alignItems:'center',justifyContent:'center',padding:'10px 0',background:'#E8F5E9',borderRadius:10,fontSize:12,fontWeight:700,color:'#2E7D32',textDecoration:'none' }}>🔗 Buka Drive</a>
+                      <a href={selectedItem.lampiran_url} target="_blank" rel="noreferrer" style={{ flex:1,display:'flex',alignItems:'center',justifyContent:'center',padding:'10px 0',background:'#E8F5E9',borderRadius:10,fontSize:12,fontWeight:700,color:'#2E7D32',textDecoration:'none' }}>⬇️ Download</a>
                     </div>
                   </div>
                 : <p style={{ padding:'12px 14px',fontSize:12,color:'#aaa',margin:0 }}>File belum tersedia.</p>}
@@ -2431,7 +2360,7 @@ const HRDApproval = ({ user, showToast, dbData, refreshData }) => {
           )}
 
           {/* Lampiran Chat HRD/Atasan */}
-          {(selectedItem.lampiran_chat_drive_link || selectedItem.lampiran_chat_url) && (
+          {selectedItem.lampiran_chat_url && (
             <div style={{ marginTop:12,padding:14,borderRadius:14,border:'1px solid #EDE7F6',background:'#F5F0FF' }}>
               <p style={{ fontSize:12,fontWeight:700,color:'#4527A0',margin:'0 0 10px' }}>💬 Screenshot Chat HRD/Atasan</p>
               {/\.pdf$/i.test(selectedItem.lampiran_chat_nama||'') ? (
@@ -2440,17 +2369,13 @@ const HRDApproval = ({ user, showToast, dbData, refreshData }) => {
                   <p style={{ fontSize:13,fontWeight:600,color:'#555',margin:'8px 0 0' }}>File PDF</p>
                 </div>
               ) : (
-                <img
-                  src={driveImgUrl(selectedItem.lampiran_chat_drive_link) || selectedItem.lampiran_chat_url}
-                  alt="chat"
-                  style={{ width:'100%',borderRadius:10,cursor:'pointer',border:'1px solid #D1C4E9' }}
-                  onClick={()=>setPreviewUrl(selectedItem.lampiran_chat_drive_link || selectedItem.lampiran_chat_url)}/>
+                <img src={selectedItem.lampiran_chat_url} alt="chat" style={{ width:'100%',borderRadius:10,cursor:'pointer',border:'1px solid #D1C4E9' }} onClick={()=>setPreviewUrl(selectedItem.lampiran_chat_url)}/>
               )}
               <div style={{ display:'flex',gap:8,marginTop:10 }}>
                 {!/\.pdf$/i.test(selectedItem.lampiran_chat_nama||'') && (
-                  <button onClick={()=>setPreviewUrl(selectedItem.lampiran_chat_drive_link || selectedItem.lampiran_chat_url)} style={{ flex:1,padding:'10px 0',background:'#EDE7F6',border:'none',borderRadius:10,fontSize:12,fontWeight:700,color:'#4527A0',cursor:'pointer' }}>👁️ Preview</button>
+                  <button onClick={()=>setPreviewUrl(selectedItem.lampiran_chat_url)} style={{ flex:1,padding:'10px 0',background:'#EDE7F6',border:'none',borderRadius:10,fontSize:12,fontWeight:700,color:'#4527A0',cursor:'pointer' }}>👁️ Preview</button>
                 )}
-                <a href={selectedItem.lampiran_chat_drive_link || selectedItem.lampiran_chat_url} target="_blank" rel="noreferrer" style={{ flex:1,display:'flex',alignItems:'center',justifyContent:'center',padding:'10px 0',background:'#E8F5E9',borderRadius:10,fontSize:12,fontWeight:700,color:'#2E7D32',textDecoration:'none' }}>🔗 Buka Drive</a>
+                <a href={selectedItem.lampiran_chat_url} target="_blank" rel="noreferrer" style={{ flex:1,display:'flex',alignItems:'center',justifyContent:'center',padding:'10px 0',background:'#E8F5E9',borderRadius:10,fontSize:12,fontWeight:700,color:'#2E7D32',textDecoration:'none' }}>⬇️ Download</a>
               </div>
             </div>
           )}
@@ -2477,8 +2402,7 @@ const HRDApproval = ({ user, showToast, dbData, refreshData }) => {
 
       {previewUrl && (
         <Modal title="Preview Lampiran" onClose={()=>setPreviewUrl(null)}>
-          <img src={driveImgUrlFull(previewUrl) || previewUrl} alt="preview" style={{ width:'100%',borderRadius:12,border:'1px solid #e0e0e0' }}/>
-          <a href={previewUrl} target="_blank" rel="noreferrer" style={{ display:'block',textAlign:'center',marginTop:8,fontSize:12,color:'#1565C0',fontWeight:600 }}>🔗 Buka di Google Drive</a>
+          <img src={previewUrl} alt="preview" style={{ width:'100%',borderRadius:12,border:'1px solid #e0e0e0' }}/>
           <div style={{ marginTop:12 }}><BtnGrad onClick={()=>setPreviewUrl(null)}>Tutup</BtnGrad></div>
         </Modal>
       )}
@@ -2703,8 +2627,6 @@ const LoginPage = ({ onLogin }) => {
 export default function WellJoyApp() {
   const [screen, setScreen] = useState('loading')  // loading dulu, cek session
   const [user, setUser] = useState(null)
-  const userRef = useRef(null)
-  const setUserWithRef = (u) => { userRef.current = u; setUserWithRef(u) }
   const [empNav, setEmpNav] = useState('home')
   const [hrdNav, setHrdNav] = useState('dashboard')
   const [toast, setToast] = useState('')
@@ -2717,96 +2639,52 @@ export default function WellJoyApp() {
   const fetchData = useCallback(async(force=false)=>{
     const now = Date.now()
     if (!force && now - lastFetchRef.current < 3000) return
-    const currentUser = userRef.current
-    if (!currentUser?.nip) return
     lastFetchRef.current = now
     setLoadingData(true)
-    const isHRDUser = currentUser.role === 'HRD'
-    const nip = currentUser.nip
-
     try {
-      if (isHRDUser) {
-        // ── HRD: load minimal dulu (dashboard + karyawan + approval saja) ──
-        // Attendance TIDAK di-fetch di sini — dimuat on-demand per tab/tanggal
-        const todayStr = (() => { const d=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Jakarta'})); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}` })()
-        const [
-          {data:users},{data:karyawan},{data:todayAtt},{data:izin},
-          {data:notifications},{data:auditLog},{data:announcements},{data:handbook}
-        ] = await Promise.all([
-          supabase.from('users').select('nip,nama,email,no_hp,role,status,password'),
-          supabase.from('master_karyawan').select('*').order('nama'),
-          // Hanya absensi HARI INI untuk dashboard stats
-          supabase.from('attendance').select('id,nip,nama,tanggal,jam_masuk,jam_keluar,status_kehadiran,menit_terlambat,foto_masuk_drive_link,foto_keluar_drive_link,lokasi_masuk,lokasi_keluar,koordinat_masuk,koordinat_keluar,status_validasi')
-            .eq('tanggal', todayStr),
-          // Hanya MENUNGGU untuk approval badge count + review
-          supabase.from('izin').select('id,nip,nama,jabatan,jenis_izin,tanggal_mulai,tanggal_selesai,jumlah_hari,keterangan,status,diajukan_pada,lampiran_nama,lampiran_url,lampiran_drive_link,lampiran_chat_nama,lampiran_chat_url,lampiran_chat_drive_link').order('created_at',{ascending:false}).limit(200),
-          supabase.from('notifications').select('*').order('created_at',{ascending:false}).limit(50),
-          supabase.from('audit_log').select('*').order('created_at',{ascending:false}).limit(50),
-          supabase.from('announcements').select('*').order('tanggal',{ascending:false}).limit(20),
-          supabase.from('handbook').select('*').order('created_at'),
-        ])
+      const [
+        {data:users},{data:karyawan},{data:attendance},{data:izin},
+        {data:notifications},{data:auditLog},{data:announcements},{data:handbook}
+      ] = await Promise.all([
+        supabase.from('users').select('nip,nama,email,no_hp,role,status,password'),
+        supabase.from('master_karyawan').select('*').order('nama'),
+        // foto_masuk/foto_keluar dihapus dari select (mungkin base64, boros egress)
+        // Foto ditampilkan via foto_masuk_drive_link / foto_keluar_drive_link
+        supabase.from('attendance').select('id,nip,nama,tanggal,jam_masuk,jam_keluar,status_kehadiran,menit_terlambat,jam_lembur,durasi,lokasi_masuk,lokasi_keluar,koordinat_masuk,koordinat_keluar,foto_masuk_drive_link,foto_keluar_drive_link,status_validasi').gte('tanggal', (() => { const d=new Date(); d.setDate(d.getDate()-90); return d.toISOString().split('T')[0] })()).order('tanggal',{ascending:false}),
+        supabase.from('izin').select('id,nip,nama,jabatan,jenis_izin,tanggal_mulai,tanggal_selesai,jumlah_hari,keterangan,status,diajukan_pada,lampiran_nama,lampiran_url,lampiran_drive_link,lampiran_chat_nama,lampiran_chat_url,lampiran_chat_drive_link').order('created_at',{ascending:false}).limit(200),
+        supabase.from('notifications').select('*').order('created_at',{ascending:false}).limit(50),
+        supabase.from('audit_log').select('*').order('created_at',{ascending:false}).limit(50),
+        supabase.from('announcements').select('*').order('tanggal',{ascending:false}).limit(20),
+        supabase.from('handbook').select('*').order('created_at'),
+      ])
 
-        // Auto-refill izin bulanan
-        const nowWIB = new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Jakarta'}))
-        const thisMonth = `${nowWIB.getFullYear()}-${String(nowWIB.getMonth()+1).padStart(2,'0')}-01`
-        const needRefill = (karyawan||[]).filter(k=>!k.last_izin_refill||k.last_izin_refill<thisMonth)
-        if (needRefill.length > 0) {
-          await Promise.all(needRefill.map(k=>supabase.from('master_karyawan').update({ sisa_izin:k.max_izin_lainnya??2, last_izin_refill:thisMonth }).eq('nip',k.nip)))
-          const {data:kr} = await supabase.from('master_karyawan').select('*').order('nama')
-          setDbData({ users:users||[],karyawan:kr||[],attendance:todayAtt||[],izin:izin||[],notifications:notifications||[],auditLog:auditLog||[],announcements:announcements||[],handbook:handbook||[] })
-          setLoadingData(false); return
-        }
-        setDbData({ users:users||[],karyawan:karyawan||[],attendance:todayAtt||[],izin:izin||[],notifications:notifications||[],auditLog:auditLog||[],announcements:announcements||[],handbook:handbook||[] })
-
-      } else {
-        // ── KARYAWAN: hanya data milik sendiri — jauh lebih ringan ──
-        const [
-          {data:karyawan},{data:attendance},{data:izin},
-          {data:notifications},{data:announcements},{data:handbook}
-        ] = await Promise.all([
-          // Profile sendiri saja (bukan semua karyawan) — perlu untuk cek sisa_izin, jadwal, dll
-          supabase.from('master_karyawan').select('*').eq('nip', nip).maybeSingle(),
-          // Absensi sendiri, 90 hari terakhir
-          supabase.from('attendance').select('id,nip,nama,tanggal,jam_masuk,jam_keluar,status_kehadiran,menit_terlambat,jam_lembur,durasi,lokasi_masuk,koordinat_masuk,foto_masuk_drive_link,foto_keluar_drive_link,status_validasi')
-            .eq('nip', nip)
-            .gte('tanggal', (() => { const d=new Date(); d.setDate(d.getDate()-90); return d.toISOString().split('T')[0] })())
-            .order('tanggal',{ascending:false}),
-          // Izin sendiri saja
-          supabase.from('izin').select('id,nip,nama,jenis_izin,tanggal_mulai,tanggal_selesai,jumlah_hari,keterangan,status,diajukan_pada,lampiran_nama,lampiran_url,lampiran_drive_link,lampiran_chat_nama,lampiran_chat_url,lampiran_chat_drive_link')
-            .eq('nip', nip).order('created_at',{ascending:false}).limit(50),
-          // Notifikasi sendiri saja
-          supabase.from('notifications').select('*').eq('nip', nip).order('created_at',{ascending:false}).limit(20),
-          // Pengumuman & handbook: semua (kecil)
-          supabase.from('announcements').select('*').order('tanggal',{ascending:false}).limit(20),
-          supabase.from('handbook').select('*').order('created_at'),
-        ])
-
-        // Auto-refill izin bulan ini untuk karyawan ini
-        const nowWIB = new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Jakarta'}))
-        const thisMonth = `${nowWIB.getFullYear()}-${String(nowWIB.getMonth()+1).padStart(2,'0')}-01`
-        const k = karyawan
-        if (k && (!k.last_izin_refill || k.last_izin_refill < thisMonth)) {
-          await supabase.from('master_karyawan').update({ sisa_izin:k.max_izin_lainnya??2, last_izin_refill:thisMonth }).eq('nip', nip)
-          const {data:kr} = await supabase.from('master_karyawan').select('*').eq('nip',nip).maybeSingle()
-          setDbData(d=>({ ...d, karyawan:[kr||k], attendance:attendance||[], izin:izin||[], notifications:notifications||[], announcements:announcements||[], handbook:handbook||[], users:[], auditLog:[] }))
-          setLoadingData(false); return
-        }
-
-        setDbData({
-          users: [],       // karyawan tidak butuh data user lain
-          auditLog: [],    // karyawan tidak butuh audit log
-          karyawan: karyawan ? [karyawan] : [],
-          attendance: attendance||[],
-          izin: izin||[],
-          notifications: notifications||[],
-          announcements: announcements||[],
-          handbook: handbook||[],
-        })
+      // ── Auto-refill sisa_izin_lainnya setiap awal bulan ──
+      const nowWIB = new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Jakarta'}))
+      const thisMonth = `${nowWIB.getFullYear()}-${String(nowWIB.getMonth()+1).padStart(2,'0')}-01`
+      const needRefill = (karyawan||[]).filter(k=>{
+        if (!k.last_izin_refill) return true
+        // Refill kalau last_izin_refill sebelum bulan ini
+        return k.last_izin_refill < thisMonth
+      })
+      if (needRefill.length > 0) {
+        await Promise.all(needRefill.map(k=>
+          supabase.from('master_karyawan').update({
+            sisa_izin: k.max_izin_lainnya ?? 2,
+            last_izin_refill: thisMonth,
+          }).eq('nip', k.nip)
+        ))
+        // Reload karyawan setelah refill
+        const {data:karyawanRefreshed} = await supabase.from('master_karyawan').select('*').order('nama')
+        setDbData({ users:users||[],karyawan:karyawanRefreshed||[],attendance:attendance||[],izin:izin||[],notifications:notifications||[],auditLog:auditLog||[],announcements:announcements||[],handbook:handbook||[] })
+        console.log(`[refill] ${needRefill.length} karyawan di-refill izin bulan ${thisMonth}`)
+        setLoadingData(false)
+        return
       }
+
+      setDbData({ users:users||[],karyawan:karyawan||[],attendance:attendance||[],izin:izin||[],notifications:notifications||[],auditLog:auditLog||[],announcements:announcements||[],handbook:handbook||[] })
     } catch(e){ console.error('Fetch error:',e) }
     setLoadingData(false)
   },[])
-
 
   // ── Restore session dari localStorage saat pertama load ──
   useEffect(()=>{
@@ -2818,7 +2696,7 @@ export default function WellJoyApp() {
         supabase.from('users').select('*').eq('nip', parsed.nip).eq('status','aktif').maybeSingle()
           .then(({ data }) => {
             if (data) {
-              setUserWithRef({ ...parsed, ...data })
+              setUser({ ...parsed, ...data })
               setScreen('app')
             } else {
               localStorage.removeItem('welljoy_session')
@@ -2827,7 +2705,7 @@ export default function WellJoyApp() {
           })
           .catch(() => {
             // Kalau offline/error, pakai data cache dulu
-            setUserWithRef(parsed)
+            setUser(parsed)
             setScreen('app')
           })
       } else {
@@ -2838,25 +2716,22 @@ export default function WellJoyApp() {
     }
   }, [])
 
-  // fetchData hanya jalan kalau user sudah ada di ref
-  useEffect(()=>{
-    if(screen==='app' && userRef.current) fetchData(true)
-  },[screen])  // eslint-disable-line
+  useEffect(()=>{ if(screen==='app') fetchData() },[screen,fetchData])
+
+  const [ajukanIzin, setAjukanIzin] = useState(false)
 
   const handleLogin = userData=>{
-    setUserWithRef(userData)
+    setUser(userData)
     setScreen('app')
     // Simpan session — jangan simpan password
     const { password:_, ...safeUser } = userData
     localStorage.setItem('welljoy_session', JSON.stringify(safeUser))
     if(userData.role==='HRD') setHrdNav('dashboard'); else setEmpNav('home')
-    // Fetch langsung setelah login (userRef sudah diset)
-    setTimeout(()=>fetchData(true), 0)
   }
 
   const handleLogout = async()=>{
     if(user) await supabase.from('audit_log').insert({ user_name:user.nama,nip:user.nip,aktivitas:'Logout dari sistem',keterangan:'' })
-    setUserWithRef(null)
+    setUser(null)
     setScreen('login')
     setAjukanIzin(false)
     localStorage.removeItem('welljoy_session')
