@@ -2843,6 +2843,8 @@ export default function WellJoyApp() {
     if(screen==='app' && userRef.current) fetchData(true)
   },[screen])  // eslint-disable-line
 
+  const [ajukanIzin, setAjukanIzin] = useState(false)
+
   const handleLogin = userData=>{
     setUserWithRef(userData)
     setScreen('app')
@@ -2861,7 +2863,6 @@ export default function WellJoyApp() {
     setAjukanIzin(false)
     localStorage.removeItem('welljoy_session')
   }
-
   // ── Loading screen saat cek session ──
   if(screen==='loading') return (
     <div style={{ minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',background:'#FBF5F5',flexDirection:'column',gap:16 }}>
